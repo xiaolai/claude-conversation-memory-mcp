@@ -53,7 +53,7 @@ Claude Code CLI is required because it stores conversation history in `~/.claude
 ### Install the MCP Server
 
 ```bash
-npm install -g @xiaolai/claude-conversation-memory-mcp
+npm install -g claude-conversation-memory-mcp
 ```
 
 ### Configure Claude Code CLI
@@ -77,7 +77,7 @@ Create or edit `~/.claude/config.json`:
   "mcpServers": {
     "conversation-memory": {
       "command": "npx",
-      "args": ["-y", "@xiaolai/claude-conversation-memory-mcp"]
+      "args": ["-y", "claude-conversation-memory-mcp"]
     }
   }
 }

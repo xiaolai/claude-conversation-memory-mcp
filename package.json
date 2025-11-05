@@ -1,5 +1,5 @@
 {
-  "name": "@xiaolai/claude-conversation-memory-mcp",
+  "name": "claude-conversation-memory-mcp",
   "version": "0.1.0",
   "description": "MCP server for indexing and searching Claude Code conversation history with decision tracking and git integration",
   "main": "dist/index.js",

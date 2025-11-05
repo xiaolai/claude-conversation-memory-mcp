@@ -105,7 +105,7 @@ Can upgrade later by re-indexing
 
 ```bash
 # User installs MCP
-npx @xiaolai/claude-conversation-memory-mcp
+npx claude-conversation-memory-mcp
 
 # User indexes conversations
 User: "Index my conversations"
