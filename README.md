@@ -93,6 +93,94 @@ Start Claude Code CLI and ask:
 
 If you see a response like "Indexed 3 conversations with 1247 messages", it's working!
 
+## 🖥️ Standalone CLI / REPL Mode
+
+Beyond the MCP server, this package includes a powerful **standalone CLI** for managing your conversation memory directly from the terminal.
+
+### Three Modes of Operation
+
+**1. Interactive REPL Mode** (Default)
+```bash
+claude-conversation-memory-mcp
+# Starts interactive shell with 40+ commands
+```
+
+**2. Single Command Mode**
+```bash
+claude-conversation-memory-mcp status
+claude-conversation-memory-mcp "search authentication"
+claude-conversation-memory-mcp mistakes --limit 5
+```
+
+**3. MCP Server Mode** (Used by Claude Code CLI)
+```bash
+claude-conversation-memory-mcp --server
+# Or automatically via stdio from Claude Code CLI
+```
+
+### Quick CLI Examples
+
+```bash
+# View database status
+claude-conversation-memory-mcp status
+
+# Index conversations
+claude-conversation-memory-mcp index --include-mcp
+
+# Search for topics
+claude-conversation-memory-mcp "search database migration" --limit 3
+
+# Find past mistakes
+claude-conversation-memory-mcp mistakes "async" --type logic_error
+
+# Check file context before editing
+claude-conversation-memory-mcp check src/auth.ts
+
+# Configure embedding model
+claude-conversation-memory-mcp config
+claude-conversation-memory-mcp set model mxbai-embed-large
+claude-conversation-memory-mcp set dimensions 1024
+
+# View help
+claude-conversation-memory-mcp help
+claude-conversation-memory-mcp "help search"
+```
+
+### Configuration Management
+
+The CLI includes built-in commands for managing embedding models and dimensions:
+
+```bash
+# View current configuration
+claude-conversation-memory-mcp config
+
+# Switch to Ollama with mxbai-embed-large (1024 dimensions)
+claude-conversation-memory-mcp set provider ollama
+claude-conversation-memory-mcp set model mxbai-embed-large
+claude-conversation-memory-mcp set dimensions 1024
+
+# Switch to Transformers.js (offline, no setup)
+claude-conversation-memory-mcp set provider transformers
+claude-conversation-memory-mcp set model Xenova/all-MiniLM-L6-v2
+claude-conversation-memory-mcp set dimensions 384
+
+# Get specific config value
+claude-conversation-memory-mcp get provider
+```
+
+### Available Commands
+
+- **📥 Indexing**: `index`, `reindex`
+- **🔍 Search**: `search`, `decisions`, `mistakes`, `similar`
+- **📋 Files**: `check`, `history`
+- **🔗 Git**: `commits`
+- **📝 Other**: `requirements`, `tools`, `docs`
+- **ℹ️ Info**: `status`, `version`, `help`
+- **⚙️ Config**: `config`, `get`, `set`
+- **🧹 Maintenance**: `vacuum`, `reset`
+
+**👉 See [Complete CLI Guide](docs/CLI-USAGE.md) for all commands, examples, and workflows**
+
 ## 🎯 Usage Examples
 
 ### First Time Setup

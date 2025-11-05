@@ -41,8 +41,7 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
       }
 
       // Dynamic import of OpenAI SDK (optional dependency)
-      // @ts-expect-error - openai is an optional dependency
-      const OpenAI = (await import("openai")).default;
+      const { default: OpenAI } = await import("openai");
       this.client = new OpenAI({
         apiKey: this.apiKey,
       }) as unknown as OpenAIClient;
