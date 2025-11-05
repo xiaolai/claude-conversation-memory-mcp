@@ -1,0 +1,65 @@
+{
+  "conversations": [
+    {
+      "id": "test-session-1",
+      "project_path": "/test/project",
+      "first_message_at": 1699200000000,
+      "last_message_at": 1699203600000,
+      "message_count": 10,
+      "git_branch": "main",
+      "claude_version": "claude-sonnet-4-5",
+      "metadata": {},
+      "created_at": 1699200000000,
+      "updated_at": 1699203600000
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg-1",
+      "conversation_id": "test-session-1",
+      "message_type": "user",
+      "role": "user",
+      "content": "Can you help me implement authentication?",
+      "timestamp": 1699200000000,
+      "is_sidechain": false,
+      "metadata": {}
+    },
+    {
+      "id": "msg-2",
+      "conversation_id": "test-session-1",
+      "message_type": "assistant",
+      "role": "assistant",
+      "content": "I'll help you implement authentication using JWT tokens.",
+      "timestamp": 1699200100000,
+      "is_sidechain": false,
+      "metadata": {}
+    }
+  ],
+  "decisions": [
+    {
+      "id": "decision-1",
+      "conversation_id": "test-session-1",
+      "message_id": "msg-2",
+      "decision_text": "Use JWT for stateless authentication",
+      "rationale": "Need to scale horizontally without session state",
+      "alternatives_considered": ["Sessions", "OAuth"],
+      "rejected_reasons": { "Sessions": "Requires sticky sessions" },
+      "context": "Authentication implementation",
+      "related_files": ["src/auth/token.ts"],
+      "related_commits": [],
+      "timestamp": 1699200100000
+    }
+  ],
+  "mistakes": [
+    {
+      "id": "mistake-1",
+      "conversation_id": "test-session-1",
+      "message_id": "msg-3",
+      "mistake_type": "logic_error",
+      "what_went_wrong": "Used synchronous JWT verify which blocked the event loop",
+      "correction": "Converted to async/await pattern",
+      "files_affected": ["src/auth/token.ts"],
+      "timestamp": 1699200200000
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "name": "@xiaolai/claude-conversation-memory-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for indexing and searching Claude Code conversation history with decision tracking and git integration",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "claude-conversation-memory-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && npm run postbuild",
+    "postbuild": "cp src/storage/schema.sql dist/storage/",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "docs": "typedoc --out docs src",
+    "test:watch": "npm test -- --watch",
+    "test:coverage": "npm test -- --coverage",
+    "pre-push": "npm run type-check && npm run lint && npm run build",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "conversation",
+    "memory",
+    "semantic-search",
+    "decision-tracking"
+  ],
+  "author": "xiaolai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xiaolai/claude-conversation-memory-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xiaolai/claude-conversation-memory-mcp/issues"
+  },
+  "homepage": "https://github.com/xiaolai/claude-conversation-memory-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.10.0",
+    "lru-cache": "^10.0.0",
+    "nanoid": "^5.0.0",
+    "simple-git": "^3.25.0",
+    "sqlite-vec": "^0.1.6"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "openai": "^4.77.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.19.1",
+    "@typescript-eslint/parser": "^8.19.1",
+    "eslint": "^9.18.0",
+    "globals": "^16.5.0",
+    "husky": "^9.1.7",
+    "jest": "^29.7.0",
+    "lint-staged": "^16.2.6",
+    "prettier": "^3.6.2",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  }
+}
