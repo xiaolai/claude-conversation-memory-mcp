@@ -303,6 +303,82 @@ By default, conversations about the MCP itself are excluded to prevent self-refe
 You: "Index all conversations, including MCP conversations"
 ```
 
+### Indexing Options
+
+When indexing conversations, several options control what gets stored:
+
+#### Include Thinking Blocks
+
+**Default**: `false` (thinking blocks are excluded)
+
+Thinking blocks contain Claude's internal reasoning process. They can be **very large** (3-5x more data) and are usually not needed for search.
+
+```
+# Default behavior (recommended)
+You: "Index conversations"
+# Thinking blocks are excluded
+
+# Include thinking blocks (increases database size significantly)
+You: "Index conversations with thinking blocks"
+```
+
+**When to enable**:
+- ✅ You want to search Claude's reasoning process
+- ✅ You're analyzing decision-making patterns
+- ❌ Don't enable if you just want to search visible conversation content
+
+#### Exclude MCP Conversations
+
+**Default**: `"self-only"` (excludes only conversation-memory MCP calls)
+
+Controls which MCP tool interactions are indexed:
+
+- `"self-only"` (default): Excludes messages about this conversation-memory MCP to prevent self-referential loops
+- `false`: Index all MCP tool calls from all servers
+- `"all-mcp"` or `true`: Exclude all MCP tool calls from all servers
+- `["server1", "server2"]`: Exclude specific MCP servers
+
+```
+# Default - exclude only conversation-memory MCP
+You: "Index conversations"
+
+# Include all MCP conversations (including this one)
+You: "Index conversations, include all MCP tools"
+
+# Exclude all MCP tool calls
+You: "Index conversations, exclude all MCP interactions"
+```
+
+**What gets filtered**: Only the specific **messages** that invoke MCP tools are excluded, not entire conversations. This preserves conversation context while preventing self-referential loops.
+
+#### Enable Git Integration
+
+**Default**: `true` (git commits are linked)
+
+Links git commits to conversations based on timestamps and file changes.
+
+```
+# Default behavior
+You: "Index conversations"
+# Git commits are automatically linked
+
+# Disable git integration
+You: "Index conversations without git integration"
+```
+
+#### Index Output
+
+After indexing, you'll see:
+
+```
+📁 Indexed from: /path/to/modern-folder, /path/to/legacy-folder
+💾 Database: /path/to/.claude-conversations-memory.db
+```
+
+This shows:
+- **Indexed folders**: Which conversation folders were used (including legacy if it exists)
+- **Database location**: Where your indexed data is stored
+
 ### Search with Date Filters
 
 ```
