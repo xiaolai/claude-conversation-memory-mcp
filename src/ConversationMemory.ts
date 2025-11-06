@@ -42,7 +42,12 @@ export class ConversationMemory {
   /**
    * Index conversations for a project
    */
-  async indexConversations(options: IndexOptions): Promise<{ embeddings_generated: boolean; embedding_error?: string }> {
+  async indexConversations(options: IndexOptions): Promise<{
+    embeddings_generated: boolean;
+    embedding_error?: string;
+    indexed_folders?: string[];
+    database_path?: string;
+  }> {
     console.log("\n=== Indexing Conversations ===");
     console.log(`Project: ${options.projectPath}`);
     if (options.sessionId) {
@@ -143,10 +148,12 @@ export class ConversationMemory {
     console.log(`Mistakes: ${stats.mistakes.count}`);
     console.log(`Git Commits: ${stats.git_commits.count}`);
 
-    // Return embedding status
+    // Return embedding status and indexing metadata
     return {
       embeddings_generated: !embeddingError,
-      embedding_error: embeddingError
+      embedding_error: embeddingError,
+      indexed_folders: parseResult.indexed_folders,
+      database_path: this.sqliteManager.getDbPath(),
     };
   }
 
@@ -264,6 +271,7 @@ export class ConversationMemory {
       tool_results: result.tool_results.filter(tr => !excludedToolUseIds.has(tr.tool_use_id)),
       file_edits: result.file_edits, // Keep all file edits
       thinking_blocks: result.thinking_blocks.filter(tb => !excludedMessageIds.has(tb.message_id)),
+      indexed_folders: result.indexed_folders, // Preserve folder metadata
     };
   }
 }

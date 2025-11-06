@@ -290,6 +290,13 @@ export class SQLiteManager {
   }
 
   /**
+   * Get database file path
+   */
+  getDbPath(): string {
+    return this.dbPath;
+  }
+
+  /**
    * Vacuum the database to reclaim space
    */
   vacuum(): void {

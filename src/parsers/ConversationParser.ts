@@ -145,6 +145,7 @@ export interface ParseResult {
   tool_results: ToolResult[];
   file_edits: FileEdit[];
   thinking_blocks: ThinkingBlock[];
+  indexed_folders?: string[]; // Folders that were actually indexed
 }
 
 export class ConversationParser {
@@ -192,6 +193,7 @@ export class ConversationParser {
         tool_results: [],
         file_edits: [],
         thinking_blocks: [],
+        indexed_folders: [],
       };
     }
 
@@ -232,6 +234,7 @@ export class ConversationParser {
       tool_results: [],
       file_edits: [],
       thinking_blocks: [],
+      indexed_folders: dirsToCheck,
     };
 
     for (const file of files) {

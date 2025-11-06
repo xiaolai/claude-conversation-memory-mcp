@@ -37,6 +37,16 @@ export class ToolHandlers {
     const sessionInfo = sessionId ? ` (session: ${sessionId})` : ' (all sessions)';
     let message = `Indexed ${stats.conversations.count} conversation(s) with ${stats.messages.count} messages${sessionInfo}`;
 
+    // Add indexed folders info
+    if (indexResult.indexed_folders && indexResult.indexed_folders.length > 0) {
+      message += `\n📁 Indexed from: ${indexResult.indexed_folders.join(', ')}`;
+    }
+
+    // Add database location info
+    if (indexResult.database_path) {
+      message += `\n💾 Database: ${indexResult.database_path}`;
+    }
+
     // Add embedding status to message
     if (indexResult.embeddings_generated) {
       message += '\n✅ Semantic search enabled (embeddings generated)';
@@ -48,6 +58,8 @@ export class ToolHandlers {
     return {
       success: true,
       project_path: projectPath,
+      indexed_folders: indexResult.indexed_folders,
+      database_path: indexResult.database_path,
       stats,
       embeddings_generated: indexResult.embeddings_generated,
       embedding_error: indexResult.embedding_error,

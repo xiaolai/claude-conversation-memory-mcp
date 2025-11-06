@@ -76,6 +76,8 @@ export interface GenerateDocumentationArgs {
 export interface IndexConversationsResponse {
   success: boolean;
   project_path: string;
+  indexed_folders?: string[];
+  database_path?: string;
   stats: {
     conversations: { count: number };
     messages: { count: number };
