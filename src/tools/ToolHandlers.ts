@@ -495,9 +495,9 @@ export class ToolHandlers {
     if (context_types.includes("decisions")) {
       const decisions = this.db.getDatabase()
         .prepare(`
-          SELECT decision_id, type, description, rationale, alternatives, rejected_approaches, affects_components, timestamp
+          SELECT id, decision_text, rationale, alternatives_considered, rejected_reasons, context, related_files, timestamp
           FROM decisions
-          WHERE description LIKE ? ${file_path ? 'AND affects_components LIKE ?' : ''}
+          WHERE decision_text LIKE ? ${file_path ? 'AND related_files LIKE ?' : ''}
           ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
           ORDER BY timestamp DESC
           LIMIT ?
@@ -508,24 +508,24 @@ export class ToolHandlers {
           ...(date_range ? [date_range[0], date_range[1]] : []),
           limit
         ) as Array<{
-          decision_id: string;
-          type: string;
-          description: string;
+          id: string;
+          decision_text: string;
           rationale: string | null;
-          alternatives: string | null;
-          rejected_approaches: string | null;
-          affects_components: string;
+          alternatives_considered: string | null;
+          rejected_reasons: string | null;
+          context: string;
+          related_files: string;
           timestamp: number;
         }>;
 
       recalled.decisions = decisions.map(d => ({
-        decision_id: d.decision_id,
-        type: d.type,
-        description: d.description,
+        decision_id: d.id,
+        type: d.context,
+        description: d.decision_text,
         rationale: d.rationale || undefined,
-        alternatives: d.alternatives ? JSON.parse(d.alternatives) : undefined,
-        rejected_approaches: d.rejected_approaches ? JSON.parse(d.rejected_approaches) : undefined,
-        affects_components: JSON.parse(d.affects_components),
+        alternatives: d.alternatives_considered ? JSON.parse(d.alternatives_considered) : undefined,
+        rejected_approaches: d.rejected_reasons ? JSON.parse(d.rejected_reasons) : undefined,
+        affects_components: JSON.parse(d.related_files),
         timestamp: new Date(d.timestamp).toISOString(),
       }));
       totalItems += recalled.decisions.length;
