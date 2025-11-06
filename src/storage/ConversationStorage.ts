@@ -32,19 +32,91 @@ import type { GitCommit } from "../parsers/GitIntegrator.js";
 import type { Requirement, Validation } from "../parsers/RequirementsExtractor.js";
 import { sanitizeForLike } from "../utils/sanitization.js";
 import type { DecisionRow, GitCommitRow, ConversationRow } from "../types/ToolTypes.js";
+import { QueryCache, type QueryCacheConfig, type CacheStats } from "../cache/QueryCache.js";
 
 /**
  * Data access layer for conversation memory storage.
  *
  * Provides CRUD operations for all conversation-related entities using SQLite.
+ * Supports optional caching for frequently accessed queries.
  */
 export class ConversationStorage {
+  private cache: QueryCache | null = null;
+
   /**
    * Create a new ConversationStorage instance.
    *
    * @param db - SQLiteManager instance for database access
    */
   constructor(private db: SQLiteManager) {}
+
+  // ==================== Cache Management ====================
+
+  /**
+   * Enable query result caching.
+   *
+   * Caching improves performance for frequently accessed queries by storing
+   * results in memory. Cache is automatically invalidated when data changes.
+   *
+   * @param config - Cache configuration (maxSize and ttlMs)
+   *
+   * @example
+   * ```typescript
+   * storage.enableCache({ maxSize: 100, ttlMs: 300000 });
+   * ```
+   */
+  enableCache(config: QueryCacheConfig): void {
+    this.cache = new QueryCache(config);
+  }
+
+  /**
+   * Disable query result caching.
+   *
+   * Clears all cached data and stops caching new queries.
+   */
+  disableCache(): void {
+    this.cache = null;
+  }
+
+  /**
+   * Check if caching is enabled.
+   *
+   * @returns True if caching is enabled
+   */
+  isCacheEnabled(): boolean {
+    return this.cache !== null;
+  }
+
+  /**
+   * Clear all cached query results.
+   *
+   * Clears the cache but keeps caching enabled.
+   */
+  clearCache(): void {
+    if (this.cache) {
+      this.cache.clear();
+      this.cache.resetStats();
+    }
+  }
+
+  /**
+   * Get cache statistics.
+   *
+   * Returns performance metrics including hits, misses, hit rate, and evictions.
+   *
+   * @returns Cache statistics or null if caching is disabled
+   *
+   * @example
+   * ```typescript
+   * const stats = storage.getCacheStats();
+   * if (stats) {
+   *   console.log(`Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`);
+   * }
+   * ```
+   */
+  getCacheStats(): CacheStats | null {
+    return this.cache ? this.cache.getStats() : null;
+  }
 
   // ==================== Conversations ====================
 
@@ -97,6 +169,10 @@ export class ConversationStorage {
           conv.created_at,
           conv.updated_at
         );
+        // Invalidate cache for this conversation
+        if (this.cache) {
+          this.cache.delete(`conversation:${conv.id}`);
+        }
       }
     });
 
@@ -118,18 +194,34 @@ export class ConversationStorage {
    * ```
    */
   getConversation(id: string): Conversation | null {
+    const cacheKey = `conversation:${id}`;
+
+    // Check cache first
+    if (this.cache) {
+      const cached = this.cache.get<Conversation | null>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
     const row = this.db
       .prepare("SELECT * FROM conversations WHERE id = ?")
       .get(id) as ConversationRow | undefined;
 
     if (!row) {
+      // Cache null result to avoid repeated queries
+      this.cache?.set(cacheKey, null);
       return null;
     }
 
-    return {
+    const result = {
       ...row,
       metadata: JSON.parse(row.metadata || "{}"),
     };
+
+    // Cache the result
+    this.cache?.set(cacheKey, result);
+    return result;
   }
 
   // ==================== Messages ====================
@@ -288,6 +380,11 @@ export class ConversationStorage {
           edit.snapshot_timestamp,
           JSON.stringify(edit.metadata)
         );
+        // Invalidate all caches for this file
+        if (this.cache) {
+          this.cache.delete(`edits:${edit.file_path}`);
+          this.cache.delete(`timeline:${edit.file_path}`);
+        }
       }
     });
 
@@ -301,11 +398,25 @@ export class ConversationStorage {
    * @returns Array of file edits, ordered by timestamp (most recent first)
    */
   getFileEdits(filePath: string): FileEdit[] {
-    return this.db
+    const cacheKey = `edits:${filePath}`;
+
+    // Check cache first
+    if (this.cache) {
+      const cached = this.cache.get<FileEdit[]>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
+    const result = this.db
       .prepare(
         "SELECT * FROM file_edits WHERE file_path = ? ORDER BY snapshot_timestamp DESC"
       )
       .all(filePath) as FileEdit[];
+
+    // Cache the result
+    this.cache?.set(cacheKey, result);
+    return result;
   }
 
   // ==================== Thinking Blocks ====================
@@ -389,18 +500,32 @@ export class ConversationStorage {
    * @internal
    */
   getDecisionsForFile(filePath: string): Decision[] {
+    const cacheKey = `decisions:${filePath}`;
+
+    // Check cache first
+    if (this.cache) {
+      const cached = this.cache.get<Decision[]>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
     const sanitized = sanitizeForLike(filePath);
     const rows = this.db
       .prepare("SELECT * FROM decisions WHERE related_files LIKE ? ESCAPE '\\' ORDER BY timestamp DESC")
       .all(`%"${sanitized}"%`) as DecisionRow[];
 
-    return rows.map((row) => ({
+    const result = rows.map((row) => ({
       ...row,
       alternatives_considered: JSON.parse(row.alternatives_considered || "[]"),
       rejected_reasons: JSON.parse(row.rejected_reasons || "{}"),
       related_files: JSON.parse(row.related_files || "[]"),
       related_commits: JSON.parse(row.related_commits || "[]"),
     }));
+
+    // Cache the result
+    this.cache?.set(cacheKey, result);
+    return result;
   }
 
   // ==================== Git Commits ====================
@@ -441,16 +566,30 @@ export class ConversationStorage {
   }
 
   getCommitsForFile(filePath: string): GitCommit[] {
+    const cacheKey = `commits:${filePath}`;
+
+    // Check cache first
+    if (this.cache) {
+      const cached = this.cache.get<GitCommit[]>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
     const sanitized = sanitizeForLike(filePath);
     const rows = this.db
       .prepare("SELECT * FROM git_commits WHERE files_changed LIKE ? ESCAPE '\\' ORDER BY timestamp DESC")
       .all(`%"${sanitized}"%`) as GitCommitRow[];
 
-    return rows.map((row) => ({
+    const result = rows.map((row) => ({
       ...row,
       files_changed: JSON.parse(row.files_changed || "[]"),
       metadata: JSON.parse(row.metadata || "{}"),
     }));
+
+    // Cache the result
+    this.cache?.set(cacheKey, result);
+    return result;
   }
 
   // ==================== Mistakes ====================
@@ -591,17 +730,36 @@ export class ConversationStorage {
     commits: GitCommit[];
     decisions: Decision[];
   } {
+    const cacheKey = `timeline:${filePath}`;
+
+    // Check cache first
+    if (this.cache) {
+      const cached = this.cache.get<{
+        file_path: string;
+        edits: FileEdit[];
+        commits: GitCommit[];
+        decisions: Decision[];
+      }>(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
     // Combine file edits, commits, and decisions
     const edits = this.getFileEdits(filePath);
     const commits = this.getCommitsForFile(filePath);
     const decisions = this.getDecisionsForFile(filePath);
 
-    return {
+    const result = {
       file_path: filePath,
       edits,
       commits,
       decisions,
     };
+
+    // Cache the result
+    this.cache?.set(cacheKey, result);
+    return result;
   }
 
   /**
