@@ -32,11 +32,15 @@ describe('End-to-End Integration', () => {
   describe('Conversation Indexing Workflow', () => {
     it('should handle empty project directory gracefully', async () => {
       // This test verifies the system handles missing conversation files
-      await expect(memory.indexConversations({
+      const result = await memory.indexConversations({
         projectPath: testDir,
         includeThinking: false,
         enableGitIntegration: false,
-      })).rejects.toThrow(); // Should throw because directory structure doesn't exist
+      });
+
+      // Should complete successfully even with no conversations
+      expect(result.embeddings_generated).toBe(true);
+      expect(result.embedding_error).toBeUndefined();
     });
 
     it('should collect statistics after indexing', () => {

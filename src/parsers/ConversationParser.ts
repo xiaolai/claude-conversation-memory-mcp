@@ -3,7 +3,7 @@
  * Parses Claude Code conversation history from ~/.claude/projects
  */
 
-import { readFileSync, readdirSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 import { nanoid } from "nanoid";
 import { pathToProjectFolderName } from "../utils/sanitization.js";
@@ -159,14 +159,36 @@ export class ConversationParser {
 
     // Convert project path to Claude projects directory name
     const projectDirName = pathToProjectFolderName(projectPath);
-    const conversationDir = join(
-      process.env.HOME || process.env.USERPROFILE || "",
-      ".claude",
-      "projects",
-      projectDirName
-    );
+    const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+
+    // Try current naming convention first
+    let conversationDir = join(homeDir, ".claude", "projects", projectDirName);
+
+    // If not found, try legacy naming (dots replaced with dashes)
+    if (!existsSync(conversationDir)) {
+      const legacyDirName = projectDirName.replace(/\./g, '-');
+      const legacyDir = join(homeDir, ".claude", "projects", legacyDirName);
+
+      if (existsSync(legacyDir)) {
+        console.log(`Using legacy folder naming: ${legacyDirName}`);
+        conversationDir = legacyDir;
+      }
+    }
 
     console.log(`Looking in: ${conversationDir}`);
+
+    // Check if directory exists
+    if (!existsSync(conversationDir)) {
+      console.warn(`⚠️ Conversation directory not found: ${conversationDir}`);
+      return {
+        conversations: [],
+        messages: [],
+        tool_uses: [],
+        tool_results: [],
+        file_edits: [],
+        thinking_blocks: [],
+      };
+    }
 
     // Read all .jsonl files, optionally filtering by session_id
     let files = readdirSync(conversationDir).filter((f) =>
