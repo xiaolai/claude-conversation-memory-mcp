@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { tmpdir } from "os";
 import { join } from "path";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import Database from "better-sqlite3";
 import { ProjectMigration } from "../../utils/ProjectMigration.js";
 import { getSQLiteManager, resetSQLiteManager } from "../../storage/SQLiteManager.js";
@@ -532,6 +532,200 @@ describe("ProjectMigration", () => {
       });
 
       expect(score).toBeGreaterThan(80); // Should boost with files
+    });
+  });
+
+  describe("merge mode", () => {
+    it("should allow merge when target has existing data", async () => {
+      // Setup: Source and target both have data
+      const sourceFolder = join(projectsDir, "-source");
+      const targetFolder = join(projectsDir, "-target");
+      mkdirSync(sourceFolder, { recursive: true });
+      mkdirSync(targetFolder, { recursive: true });
+
+      // Source has 1 conversation
+      writeFileSync(join(sourceFolder, "source-session.jsonl"), "source-data");
+      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      sourceDb.exec(`
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
+        CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT);
+        INSERT INTO conversations VALUES ('source-session', '/old-project', 1000);
+        INSERT INTO messages VALUES ('msg1', 'source-session');
+      `);
+      sourceDb.close();
+
+      // Target has 1 conversation
+      writeFileSync(join(targetFolder, "target-session.jsonl"), "target-data");
+      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      targetDb.exec(`
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
+        CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT);
+        INSERT INTO conversations VALUES ('target-session', '/new-project', 2000);
+        INSERT INTO messages VALUES ('msg2', 'target-session');
+      `);
+      targetDb.close();
+
+      // Test: Execute merge (mode='merge')
+      const result = await migration.executeMigration(
+        sourceFolder,
+        targetFolder,
+        "/old-project",
+        "/new-project",
+        false,
+        "merge"
+      );
+
+      // Verify: Both conversations exist in target
+      const db = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const conversations = db.prepare("SELECT id FROM conversations ORDER BY id").all() as Array<{ id: string }>;
+      expect(conversations).toHaveLength(2);
+      expect(conversations.map(c => c.id)).toEqual([
+        "source-session",
+        "target-session"
+      ]);
+      db.close();
+
+      expect(result.success).toBe(true);
+    });
+
+    it("should skip duplicate conversation IDs (keep target)", async () => {
+      // Setup: Both have same conversation ID
+      const sourceFolder = join(projectsDir, "-source");
+      const targetFolder = join(projectsDir, "-target");
+      mkdirSync(sourceFolder, { recursive: true });
+      mkdirSync(targetFolder, { recursive: true });
+
+      // Source has conversation 'shared-id' with timestamp 1000
+      writeFileSync(join(sourceFolder, "shared-id.jsonl"), "source-version");
+      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      sourceDb.exec(`
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
+        INSERT INTO conversations VALUES ('shared-id', '/old', 1000);
+      `);
+      sourceDb.close();
+
+      // Target has conversation 'shared-id' with timestamp 2000 (newer)
+      writeFileSync(join(targetFolder, "shared-id.jsonl"), "target-version");
+      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      targetDb.exec(`
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
+        INSERT INTO conversations VALUES ('shared-id', '/new', 2000);
+      `);
+      targetDb.close();
+
+      // Test: Execute merge
+      await migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false, "merge");
+
+      // Verify: Target version kept (not overwritten)
+      const db = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const row = db.prepare("SELECT last_message_at FROM conversations WHERE id = ?").get("shared-id") as { last_message_at: number };
+      expect(row.last_message_at).toBe(2000); // Target's timestamp preserved
+      db.close();
+
+      // Verify: Target JSONL file not overwritten
+      const content = readFileSync(join(targetFolder, "shared-id.jsonl"), "utf-8");
+      expect(content).toBe("target-version");
+    });
+
+    it("should copy only new JSONL files in merge mode", async () => {
+      // Setup
+      const sourceFolder = join(projectsDir, "-source");
+      const targetFolder = join(projectsDir, "-target");
+      mkdirSync(sourceFolder, { recursive: true });
+      mkdirSync(targetFolder, { recursive: true });
+
+      // Source has 2 files
+      writeFileSync(join(sourceFolder, "session-1.jsonl"), "data1");
+      writeFileSync(join(sourceFolder, "session-2.jsonl"), "data2");
+      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      sourceDb.exec(`
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT);
+        INSERT INTO conversations VALUES ('session-1', '/old');
+        INSERT INTO conversations VALUES ('session-2', '/old');
+      `);
+      sourceDb.close();
+
+      // Target already has session-1
+      writeFileSync(join(targetFolder, "session-1.jsonl"), "existing");
+      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      targetDb.exec(`
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT);
+        INSERT INTO conversations VALUES ('session-1', '/new');
+      `);
+      targetDb.close();
+
+      // Test: Execute merge
+      const result = await migration.executeMigration(
+        sourceFolder,
+        targetFolder,
+        "/old",
+        "/new",
+        false,
+        "merge"
+      );
+
+      // Verify: Only session-2 copied (session-1 skipped)
+      expect(result.filesCopied).toBe(1);
+
+      // Verify: session-1.jsonl not overwritten
+      const content1 = readFileSync(join(targetFolder, "session-1.jsonl"), "utf-8");
+      expect(content1).toBe("existing");
+
+      // Verify: session-2.jsonl copied
+      expect(existsSync(join(targetFolder, "session-2.jsonl"))).toBe(true);
+    });
+
+    it("should reject merge when mode='migrate' and target has data", async () => {
+      // Setup: Target has existing data
+      const sourceFolder = join(projectsDir, "-source");
+      const targetFolder = join(projectsDir, "-target");
+      mkdirSync(sourceFolder, { recursive: true });
+      mkdirSync(targetFolder, { recursive: true });
+
+      writeFileSync(join(sourceFolder, "session.jsonl"), "source");
+      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      sourceDb.exec(`
+        CREATE TABLE conversations (id TEXT, project_path TEXT);
+        INSERT INTO conversations VALUES ('s1', '/old');
+      `);
+      sourceDb.close();
+
+      writeFileSync(join(targetFolder, "existing.jsonl"), "target");
+
+      // Test: Execute with mode='migrate' (default)
+      await expect(
+        migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false, "migrate")
+      ).rejects.toThrow("Target folder already has conversation data");
+    });
+
+    it("should preserve target backup in merge mode", async () => {
+      // Setup
+      const sourceFolder = join(projectsDir, "-source");
+      const targetFolder = join(projectsDir, "-target");
+      mkdirSync(sourceFolder, { recursive: true });
+      mkdirSync(targetFolder, { recursive: true });
+
+      writeFileSync(join(sourceFolder, "s1.jsonl"), "source");
+      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      sourceDb.exec(`
+        CREATE TABLE conversations (id TEXT, project_path TEXT);
+        INSERT INTO conversations VALUES ('s1', '/old');
+      `);
+      sourceDb.close();
+
+      writeFileSync(join(targetFolder, "t1.jsonl"), "target");
+      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      targetDb.exec(`
+        CREATE TABLE conversations (id TEXT, project_path TEXT);
+        INSERT INTO conversations VALUES ('t1', '/new');
+      `);
+      targetDb.close();
+
+      // Test: Execute merge
+      await migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false, "merge");
+
+      // Verify: Backup created in target folder (not source)
+      expect(existsSync(join(targetFolder, ".claude-conversations-memory.db.bak"))).toBe(true);
     });
   });
 });

@@ -573,23 +573,34 @@ export class ToolHandlers {
     const oldProjectPath = typedArgs.old_project_path;
     const newProjectPath = typedArgs.new_project_path;
     const dryRun = typedArgs.dry_run ?? false;
+    const mode = typedArgs.mode ?? "migrate";
 
     // Calculate target folder path
     const targetFolderName = pathToProjectFolderName(newProjectPath);
     const targetFolder = join(this.migration.getProjectsDir(), targetFolderName);
 
-    // Execute migration
+    // Execute migration or merge
     const result = await this.migration.executeMigration(
       sourceFolder,
       targetFolder,
       oldProjectPath,
       newProjectPath,
-      dryRun
+      dryRun,
+      mode
     );
 
-    const message = dryRun
-      ? `Dry run: Would migrate ${result.filesCopied} conversation files from ${sourceFolder} to ${targetFolder}`
-      : `Successfully migrated ${result.filesCopied} conversation files to ${targetFolder}. Original files preserved in ${sourceFolder}.`;
+    let message: string;
+    if (dryRun) {
+      message =
+        mode === "merge"
+          ? `Dry run: Would merge ${result.filesCopied} new conversation files into ${targetFolder}`
+          : `Dry run: Would migrate ${result.filesCopied} conversation files from ${sourceFolder} to ${targetFolder}`;
+    } else {
+      message =
+        mode === "merge"
+          ? `Successfully merged ${result.filesCopied} new conversation files into ${targetFolder}. Original files preserved in ${sourceFolder}.`
+          : `Successfully migrated ${result.filesCopied} conversation files to ${targetFolder}. Original files preserved in ${sourceFolder}.`;
+    }
 
     return {
       success: result.success,

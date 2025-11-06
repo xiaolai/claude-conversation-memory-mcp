@@ -683,10 +683,31 @@ function handleConfigShow(): string {
   output += `  ${chalk.cyan("baseUrl")}        Ollama base URL (default: http://localhost:11434)\n`;
   output += `  ${chalk.cyan("apiKey")}         OpenAI API key\n\n`;
 
+  // Show available models by provider
+  output += chalk.bold("Known Models by Provider:\n\n");
+
+  output += chalk.yellow("Ollama (local):\n");
+  output += `  ${"mxbai-embed-large".padEnd(30)} 1024 dims  ${chalk.dim("(recommended)")}\n`;
+  output += `  ${"nomic-embed-text".padEnd(30)}  768 dims  ${chalk.dim("(fast, good quality)")}\n`;
+  output += `  ${"all-minilm".padEnd(30)}  384 dims  ${chalk.dim("(lightweight)")}\n`;
+  output += `  ${"snowflake-arctic-embed".padEnd(30)} 1024 dims  ${chalk.dim("(optimized for retrieval)")}\n\n`;
+
+  output += chalk.yellow("Transformers (offline):\n");
+  output += `  ${"Xenova/all-MiniLM-L6-v2".padEnd(30)}  384 dims  ${chalk.dim("(default, no setup)")}\n`;
+  output += `  ${"Xenova/all-mpnet-base-v2".padEnd(30)}  768 dims  ${chalk.dim("(better quality)")}\n`;
+  output += `  ${"Xenova/bge-small-en-v1.5".padEnd(30)}  384 dims  ${chalk.dim("(English-optimized)")}\n`;
+  output += `  ${"Xenova/bge-base-en-v1.5".padEnd(30)}  768 dims  ${chalk.dim("(English, higher quality)")}\n\n`;
+
+  output += chalk.yellow("OpenAI (cloud):\n");
+  output += `  ${"text-embedding-3-small".padEnd(30)} 1536 dims  ${chalk.dim("(cost-effective)")}\n`;
+  output += `  ${"text-embedding-3-large".padEnd(30)} 3072 dims  ${chalk.dim("(best quality)")}\n`;
+  output += `  ${"text-embedding-ada-002".padEnd(30)} 1536 dims  ${chalk.dim("(legacy)")}\n\n`;
+
   output += chalk.gray(`Config file location: ${configPath}\n`);
   if (!configExists) {
     output += chalk.yellow("Config file will be created on first 'set' command.\n");
   }
+  output += chalk.gray("See example config: .claude-memory-config.example.jsonc\n");
 
   return output;
 }

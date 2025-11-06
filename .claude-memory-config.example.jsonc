@@ -1,0 +1,50 @@
+{
+  "embedding": {
+    // Provider: Choose one of "ollama" | "transformers" | "openai"
+    // - ollama: Local models via Ollama (fast, private, requires Ollama installed)
+    // - transformers: Offline models via Transformers.js (no setup, slower first run)
+    // - openai: Cloud API (best quality, requires API key, costs money)
+    "provider": "ollama",
+
+    // Model name: See available models by running `config` command
+    //
+    // Ollama models (require: ollama pull <model>):
+    //   - mxbai-embed-large       (1024 dims, recommended for quality)
+    //   - nomic-embed-text        (768 dims, fast and good quality)
+    //   - all-minilm              (384 dims, lightweight)
+    //   - snowflake-arctic-embed  (1024 dims, optimized for retrieval)
+    //
+    // Transformers models (auto-download on first use, no setup):
+    //   - Xenova/all-MiniLM-L6-v2     (384 dims, default, fastest)
+    //   - Xenova/all-mpnet-base-v2    (768 dims, better quality)
+    //   - Xenova/bge-small-en-v1.5    (384 dims, English-optimized)
+    //   - Xenova/bge-base-en-v1.5     (768 dims, English, higher quality)
+    //
+    // OpenAI models (require API key):
+    //   - text-embedding-3-small  (1536 dims, $0.020 per 1M tokens)
+    //   - text-embedding-3-large  (3072 dims, $0.130 per 1M tokens, best quality)
+    //   - text-embedding-ada-002  (1536 dims, legacy)
+    "model": "mxbai-embed-large",
+
+    // Dimensions: Optional - auto-detected based on model name if omitted
+    // Only specify if you need to override auto-detection or use a custom model
+    // Valid range: 1-10000
+    //
+    // Common dimensions by model:
+    //   mxbai-embed-large: 1024
+    //   nomic-embed-text: 768
+    //   Xenova/all-MiniLM-L6-v2: 384
+    //   text-embedding-3-small: 1536
+    //   text-embedding-3-large: 3072
+    "dimensions": 1024,
+
+    // Base URL: Only for Ollama provider
+    // Default: http://localhost:11434
+    // Change if Ollama is running on a different host/port
+    "baseUrl": "http://localhost:11434"
+
+    // API Key: Only for OpenAI provider
+    // Can also be set via OPENAI_API_KEY environment variable
+    // "apiKey": "sk-..."
+  }
+}

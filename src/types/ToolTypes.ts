@@ -402,6 +402,7 @@ export interface MigrateProjectArgs {
   old_project_path: string;
   new_project_path: string;
   dry_run?: boolean;
+  mode?: "migrate" | "merge";
 }
 
 export interface MigrateProjectResponse {

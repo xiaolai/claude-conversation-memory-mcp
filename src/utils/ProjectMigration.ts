@@ -162,7 +162,11 @@ export class ProjectMigration {
   /**
    * Validate migration is safe and possible
    */
-  validateMigration(sourceFolder: string, targetFolder: string): ValidationResult {
+  validateMigration(
+    sourceFolder: string,
+    targetFolder: string,
+    mode: "migrate" | "merge" = "migrate"
+  ): ValidationResult {
     const errors: string[] = [];
 
     // Check source exists
@@ -189,8 +193,8 @@ export class ProjectMigration {
       }
     }
 
-    // Check target doesn't have data (conflict detection)
-    if (existsSync(targetFolder)) {
+    // Check target doesn't have data (conflict detection) - ONLY for migrate mode
+    if (mode === "migrate" && existsSync(targetFolder)) {
       const targetFiles = readdirSync(targetFolder).filter(f => f.endsWith(".jsonl"));
       if (targetFiles.length > 0) {
         errors.push("Target folder already has conversation data");
@@ -235,10 +239,11 @@ export class ProjectMigration {
     targetFolder: string,
     oldProjectPath: string,
     newProjectPath: string,
-    dryRun: boolean
+    dryRun: boolean,
+    mode: "migrate" | "merge" = "migrate"
   ): Promise<MigrationResult> {
     // Validate first
-    const validation = this.validateMigration(sourceFolder, targetFolder);
+    const validation = this.validateMigration(sourceFolder, targetFolder, mode);
     if (!validation.valid) {
       throw new Error(`Migration validation failed: ${validation.errors.join(", ")}`);
     }
@@ -257,39 +262,184 @@ export class ProjectMigration {
       mkdirSync(targetFolder, { recursive: true });
     }
 
-    // Copy all JSONL files
-    const jsonlFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
-    let filesCopied = 0;
-
-    for (const file of jsonlFiles) {
-      const sourcePath = join(sourceFolder, file);
-      const targetPath = join(targetFolder, file);
-      copyFileSync(sourcePath, targetPath);
-      filesCopied++;
-    }
-
-    // Copy and update database
     const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
     const targetDb = join(targetFolder, ".claude-conversations-memory.db");
 
+    // Branch based on mode
+    if (mode === "merge") {
+      return this.executeMerge(
+        sourceFolder,
+        targetFolder,
+        sourceDb,
+        targetDb,
+        oldProjectPath,
+        newProjectPath
+      );
+    } else {
+      // Original migrate logic (replace target)
+      // Copy all JSONL files
+      const jsonlFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
+      let filesCopied = 0;
+
+      for (const file of jsonlFiles) {
+        const sourcePath = join(sourceFolder, file);
+        const targetPath = join(targetFolder, file);
+        copyFileSync(sourcePath, targetPath);
+        filesCopied++;
+      }
+
+      if (existsSync(sourceDb)) {
+        // Create backup
+        const backupPath = join(sourceFolder, ".claude-conversations-memory.db.bak");
+        copyFileSync(sourceDb, backupPath);
+
+        // Copy database
+        copyFileSync(sourceDb, targetDb);
+
+        // Update project_path in the copied database
+        this.updateProjectPaths(targetDb, oldProjectPath, newProjectPath);
+      }
+
+      return {
+        success: true,
+        filesCopied,
+        databaseUpdated: true,
+        message: `Migrated ${filesCopied} conversation files`
+      };
+    }
+  }
+
+  /**
+   * Execute merge (combine source into existing target)
+   */
+  private executeMerge(
+    sourceFolder: string,
+    targetFolder: string,
+    sourceDb: string,
+    targetDb: string,
+    oldProjectPath: string,
+    newProjectPath: string
+  ): MigrationResult {
+    // Copy only JSONL files that don't exist in target (skip duplicates)
+    const sourceFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
+    const existingFiles = existsSync(targetFolder)
+      ? readdirSync(targetFolder).filter(f => f.endsWith(".jsonl"))
+      : [];
+    const existingSet = new Set(existingFiles);
+
+    let filesCopied = 0;
+    for (const file of sourceFiles) {
+      if (!existingSet.has(file)) {
+        const sourcePath = join(sourceFolder, file);
+        const targetPath = join(targetFolder, file);
+        copyFileSync(sourcePath, targetPath);
+        filesCopied++;
+      }
+    }
+
+    // Merge databases
     if (existsSync(sourceDb)) {
-      // Create backup
-      const backupPath = join(sourceFolder, ".claude-conversations-memory.db.bak");
-      copyFileSync(sourceDb, backupPath);
+      if (existsSync(targetDb)) {
+        // Backup target database before merge
+        const backupPath = join(targetFolder, ".claude-conversations-memory.db.bak");
+        copyFileSync(targetDb, backupPath);
 
-      // Copy database
-      copyFileSync(sourceDb, targetDb);
-
-      // Update project_path in the copied database
-      this.updateProjectPaths(targetDb, oldProjectPath, newProjectPath);
+        // Merge source into target
+        this.mergeDatabase(sourceDb, targetDb, oldProjectPath, newProjectPath);
+      } else {
+        // No target database yet, just copy
+        copyFileSync(sourceDb, targetDb);
+        this.updateProjectPaths(targetDb, oldProjectPath, newProjectPath);
+      }
     }
 
     return {
       success: true,
       filesCopied,
       databaseUpdated: true,
-      message: `Migrated ${filesCopied} conversation files`
+      message: `Merged ${filesCopied} new conversation files into target`
     };
+  }
+
+  /**
+   * Merge source database into target database (INSERT OR IGNORE strategy)
+   */
+  private mergeDatabase(
+    sourceDbPath: string,
+    targetDbPath: string,
+    oldProjectPath: string,
+    newProjectPath: string
+  ): void {
+    // Check which tables exist BEFORE attaching
+    const source = new Database(sourceDbPath, { readonly: true });
+    const sourceTables = new Set(
+      (
+        source.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      ).map(row => row.name)
+    );
+    source.close();
+
+    const target = new Database(targetDbPath);
+    const targetTables = new Set(
+      (
+        target.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      ).map(row => row.name)
+    );
+
+    try {
+      target.exec("BEGIN TRANSACTION");
+
+      // Attach source database
+      target.exec(`ATTACH DATABASE '${sourceDbPath}' AS source`);
+
+      // Merge conversations (always exists)
+      target.exec(`
+        INSERT OR IGNORE INTO conversations
+        SELECT * FROM source.conversations
+      `);
+
+      // Merge other tables only if they exist in both databases
+      const tablesToMerge = [
+        "messages",
+        "tool_uses",
+        "decisions",
+        "mistakes",
+        "requirements",
+        "file_evolution",
+        "git_commits"
+      ];
+
+      for (const table of tablesToMerge) {
+        if (sourceTables.has(table) && targetTables.has(table)) {
+          target.exec(`
+            INSERT OR IGNORE INTO ${table}
+            SELECT * FROM source.${table}
+          `);
+        }
+      }
+
+      // Update project_path for newly merged conversations from source
+      const stmt = target.prepare(`
+        UPDATE conversations
+        SET project_path = ?
+        WHERE project_path = ?
+      `);
+      stmt.run(newProjectPath, oldProjectPath);
+
+      target.exec("COMMIT");
+
+      // Detach source after commit
+      target.exec("DETACH DATABASE source");
+    } catch (error) {
+      try {
+        target.exec("ROLLBACK");
+      } catch (_rollbackError) {
+        // Rollback might fail if transaction already ended
+      }
+      throw error;
+    } finally {
+      target.close();
+    }
   }
 
   /**

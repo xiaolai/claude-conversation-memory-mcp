@@ -57,6 +57,12 @@ Claude Code CLI is required because it stores conversation history in `~/.claude
 npm install -g claude-conversation-memory-mcp
 ```
 
+**Discover Available Models:**
+After installation, you can see all available embedding models and their dimensions:
+- Run the CLI: `claude-conversation-memory-mcp`
+- Type: `config` to see all available models organized by provider
+- Or check the example config file: `.claude-memory-config.example.jsonc`
+
 ### Configure Claude Code CLI
 
 **MCP Configuration File Priority:**
@@ -454,6 +460,65 @@ You: "Dry run: migrate from [source] old path [old] new path [new]"
 ```
 
 This shows what would be migrated without actually copying files.
+
+### Merge Conversations from Different Projects
+
+**NEW in v0.4.0**: Combine conversation history from different projects into one folder using merge mode.
+
+**Use case**: You want to merge conversations from `/project-a/drafts/2025-01-05` into your current project `/project-b`.
+
+**Step 1: Discover the source folder**
+
+```
+You: "Discover old conversations for project path /Users/name/project-a/drafts/2025-01-05"
+```
+
+**Step 2: Merge into current project**
+
+```
+You: "Merge conversations from /Users/name/.claude/projects/-project-a-drafts-2025-01-05, old path /Users/name/project-a/drafts/2025-01-05, new path /Users/name/project-b, mode merge"
+```
+
+Claude will:
+- Copy only **new** conversation files (skip duplicates)
+- Keep target conversations when IDs collide (no data loss)
+- Merge all database entries using INSERT OR IGNORE
+- Create backup of target database before merge
+- Preserve all original source data
+
+**Example workflow:**
+
+```markdown
+# Scenario: You have conversations from different projects to combine
+
+Current project: /Users/alice/main-project (already has 20 conversations)
+Source project: /Users/alice/drafts/experiment (has 10 conversations, 3 overlap with main)
+
+You: "Discover old conversations for /Users/alice/drafts/experiment"
+
+Claude: Found 1 folder:
+- Folder: -Users-alice-drafts-experiment
+- Original path: /Users/alice/drafts/experiment
+- Conversations: 10
+- Files: 10
+
+You: "Merge from /Users/alice/.claude/projects/-Users-alice-drafts-experiment, old path /Users/alice/drafts/experiment, new path /Users/alice/main-project, mode merge"
+
+Claude: Successfully merged 7 new conversation files into /Users/alice/.claude/projects/-Users-alice-main-project
+(3 duplicate conversations were skipped to preserve target data)
+Backup created at: .claude-conversations-memory.db.bak
+
+# Result: main-project now has 27 conversations (20 original + 7 new from experiment)
+```
+
+**Key differences between migrate and merge:**
+
+| Feature | Migrate Mode (default) | Merge Mode |
+|---------|----------------------|------------|
+| Target has data | ❌ Rejected (conflict) | ✅ Allowed |
+| Duplicate IDs | Overwrites target | Skips source (keeps target) |
+| Use case | Renamed project | Combine different projects |
+| Backup location | Source folder | Target folder |
 
 ## 📚 Learn More
 

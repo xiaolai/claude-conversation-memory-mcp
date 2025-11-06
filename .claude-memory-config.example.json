@@ -1,0 +1,8 @@
+{
+  "embedding": {
+    "provider": "ollama",
+    "model": "mxbai-embed-large",
+    "dimensions": 1024,
+    "baseUrl": "http://localhost:11434"
+  }
+}

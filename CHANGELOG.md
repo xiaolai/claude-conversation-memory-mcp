@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-01-06
+
+### Added
+
+- **Merge Mode for Project Migration** - Combine conversations from different projects into one folder
+  - `migrate_project` tool now supports `mode` parameter: "migrate" (default) or "merge"
+  - "merge" mode combines conversations from source into existing target folder
+  - Duplicate conversation IDs are skipped (target kept) - no data loss
+  - Safely merge history from different projects or development branches
+  - Automatic target database backup before merge
+  - Transaction-based merge with rollback on error
+
+### Changed
+
+- `migrate_project` tool description updated to document both modes
+- Tool handler generates mode-specific success messages
+
+### Technical Details
+
+- New `executeMerge()` method in `ProjectMigration` class
+- New `mergeDatabase()` method uses `INSERT OR IGNORE` strategy
+- Defensive table existence checking for schema compatibility
+- 5 new comprehensive tests for merge mode (all passing)
+
 ## [0.3.0] - 2025-01-06
 
 ### Added

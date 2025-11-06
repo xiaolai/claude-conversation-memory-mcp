@@ -285,7 +285,7 @@ export const TOOLS = {
 
   migrate_project: {
     name: "migrate_project",
-    description: "Migrate conversation history from an old project folder to a new location. Copies JSONL files and updates database paths. Creates backups automatically.",
+    description: "Migrate or merge conversation history from different project folders. Use 'migrate' mode (default) to replace target folder when renaming projects. Use 'merge' mode to combine conversations from different projects into one folder. Creates backups automatically.",
     inputSchema: {
       type: "object",
       properties: {
@@ -305,6 +305,12 @@ export const TOOLS = {
           type: "boolean",
           description: "If true, shows what would be migrated without making changes (default: false)",
           default: false,
+        },
+        mode: {
+          type: "string",
+          enum: ["migrate", "merge"],
+          description: "Operation mode: 'migrate' (default) replaces target folder, 'merge' combines conversations from source into existing target. In merge mode, duplicate conversation IDs are skipped (target kept). Use 'merge' to combine history from different projects.",
+          default: "migrate",
         },
       },
       required: ["source_folder", "old_project_path", "new_project_path"],
