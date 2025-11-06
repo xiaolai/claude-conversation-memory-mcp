@@ -1,25 +1,66 @@
 /**
- * Decision Extractor
- * Identifies and extracts decisions from conversations to prevent regressions
+ * Decision Extractor - Identifies and extracts decisions from conversations.
+ *
+ * This extractor analyzes conversation messages and thinking blocks to identify
+ * technical and architectural decisions made during development. It captures:
+ * - What decision was made
+ * - Why it was made (rationale)
+ * - What alternatives were considered
+ * - Why alternatives were rejected
+ * - Context (what the decision was about)
+ *
+ * Uses pattern matching to detect decision indicators like "we decided to",
+ * "using X instead of Y because", and user corrections.
+ *
+ * @example
+ * ```typescript
+ * const extractor = new DecisionExtractor();
+ * const decisions = extractor.extractDecisions(messages, thinkingBlocks);
+ * console.log(`Found ${decisions.length} decisions`);
+ * decisions.forEach(d => {
+ *   console.log(`Decision: ${d.decision_text}`);
+ *   console.log(`Rationale: ${d.rationale}`);
+ * });
+ * ```
  */
 
 import { nanoid } from "nanoid";
 import type { Message, ThinkingBlock } from "./ConversationParser.js";
 
+/**
+ * Represents a technical or architectural decision made during development.
+ */
 export interface Decision {
+  /** Unique decision identifier */
   id: string;
+  /** Conversation where this decision was made */
   conversation_id: string;
+  /** Message containing the decision */
   message_id: string;
+  /** The decision that was made */
   decision_text: string;
+  /** Why this decision was made */
   rationale?: string;
+  /** Alternative approaches that were considered */
   alternatives_considered: string[];
+  /** Reasons why alternatives were rejected */
   rejected_reasons: Record<string, string>;
+  /** Context/domain of the decision (e.g., 'database', 'authentication') */
   context?: string;
+  /** Files affected by this decision */
   related_files: string[];
+  /** Git commits implementing this decision */
   related_commits: string[];
+  /** When the decision was made */
   timestamp: number;
 }
 
+/**
+ * Extracts technical and architectural decisions from conversation history.
+ *
+ * Analyzes messages and thinking blocks using pattern matching to identify
+ * decisions, rationale, alternatives, and context.
+ */
 export class DecisionExtractor {
   // Decision pattern indicators
   private readonly DECISION_PATTERNS = [
@@ -59,7 +100,24 @@ export class DecisionExtractor {
   ];
 
   /**
-   * Extract decisions from messages and thinking blocks
+   * Extract decisions from messages and thinking blocks.
+   *
+   * Analyzes conversation messages to identify decisions using pattern matching.
+   * Looks for explicit decision statements, user corrections, and thinking blocks
+   * that contain decision-making processes.
+   *
+   * @param messages - Array of conversation messages to analyze
+   * @param thinkingBlocks - Array of thinking blocks (Claude's internal reasoning)
+   * @returns Array of extracted Decision objects
+   *
+   * @example
+   * ```typescript
+   * const extractor = new DecisionExtractor();
+   * const decisions = extractor.extractDecisions(messages, thinkingBlocks);
+   *
+   * // Find decisions about databases
+   * const dbDecisions = decisions.filter(d => d.context?.includes('database'));
+   * ```
    */
   extractDecisions(
     messages: Message[],

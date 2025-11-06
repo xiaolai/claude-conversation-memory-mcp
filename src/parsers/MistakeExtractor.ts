@@ -1,23 +1,64 @@
 /**
- * Mistake Extractor
- * Identifies errors and how they were corrected to prevent repetition
+ * Mistake Extractor - Identifies errors and how they were corrected.
+ *
+ * This extractor analyzes conversation messages and tool results to identify
+ * mistakes made during development and how they were corrected. It helps prevent
+ * repeating the same errors by documenting:
+ * - What went wrong
+ * - How it was corrected
+ * - Files affected
+ * - Type of mistake (logic error, wrong approach, etc.)
+ *
+ * Sources of mistakes:
+ * - Tool execution errors (failed commands, syntax errors)
+ * - User corrections ("that's wrong", "don't do that")
+ * - Error discussions (debugging conversations)
+ *
+ * @example
+ * ```typescript
+ * const extractor = new MistakeExtractor();
+ * const mistakes = extractor.extractMistakes(messages, toolResults);
+ * console.log(`Found ${mistakes.length} mistakes`);
+ * mistakes.forEach(m => {
+ *   console.log(`${m.mistake_type}: ${m.what_went_wrong}`);
+ *   if (m.correction) console.log(`Fixed by: ${m.correction}`);
+ * });
+ * ```
  */
 
 import { nanoid } from "nanoid";
 import type { Message, ToolResult } from "./ConversationParser.js";
 
+/**
+ * Represents a mistake made during development and how it was corrected.
+ */
 export interface Mistake {
+  /** Unique mistake identifier */
   id: string;
+  /** Conversation where the mistake occurred */
   conversation_id: string;
+  /** Message containing or referencing the mistake */
   message_id: string;
+  /** Category of mistake */
   mistake_type: "logic_error" | "wrong_approach" | "misunderstanding" | "tool_error" | "syntax_error";
+  /** Description of what went wrong */
   what_went_wrong: string;
+  /** How the mistake was corrected */
   correction?: string;
+  /** User's message correcting the mistake */
   user_correction_message?: string;
+  /** Files affected by this mistake */
   files_affected: string[];
+  /** When the mistake occurred */
   timestamp: number;
 }
 
+/**
+ * Extracts mistakes and corrections from conversation history.
+ *
+ * Analyzes tool errors, user corrections, and error discussions to document
+ * mistakes and prevent repetition.
+ */
 export class MistakeExtractor {
   // User correction indicators
   private readonly CORRECTION_INDICATORS = [
@@ -56,7 +97,25 @@ export class MistakeExtractor {
   };
 
   /**
-   * Extract mistakes from messages and tool results
+   * Extract mistakes from messages and tool results.
+   *
+   * Analyzes three sources to identify mistakes:
+   * 1. Tool execution errors (failed commands, syntax errors)
+   * 2. User corrections (explicit corrections by the user)
+   * 3. Error discussions (conversations about bugs and fixes)
+   *
+   * @param messages - Array of conversation messages
+   * @param toolResults - Array of tool execution results
+   * @returns Array of extracted Mistake objects, deduplicated
+   *
+   * @example
+   * ```typescript
+   * const extractor = new MistakeExtractor();
+   * const mistakes = extractor.extractMistakes(messages, toolResults);
+   *
+   * // Find logic errors
+   * const logicErrors = mistakes.filter(m => m.mistake_type === 'logic_error');
+   * ```
    */
   extractMistakes(messages: Message[], toolResults: ToolResult[]): Mistake[] {
     const mistakes: Mistake[] = [];

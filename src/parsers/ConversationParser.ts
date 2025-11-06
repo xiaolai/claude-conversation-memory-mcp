@@ -1,6 +1,28 @@
 /**
- * Multi-pass JSONL Conversation Parser
- * Parses Claude Code conversation history from ~/.claude/projects
+ * Multi-pass JSONL Conversation Parser for Claude Code history.
+ *
+ * This parser reads conversation history from Claude Code's storage locations
+ * (~/.claude/projects) and extracts structured data including messages, tool uses,
+ * file edits, and thinking blocks.
+ *
+ * The parser handles two directory structures:
+ * - Modern: ~/.claude/projects/{sanitized-path}
+ * - Legacy: ~/.claude/projects/{original-project-name}
+ *
+ * It performs a multi-pass parsing approach:
+ * 1. First pass: Extract conversations and messages
+ * 2. Second pass: Link tool uses and results
+ * 3. Third pass: Extract file edits from snapshots
+ * 4. Fourth pass: Extract thinking blocks
+ *
+ * @example
+ * ```typescript
+ * const parser = new ConversationParser();
+ * const result = parser.parseProject('/path/to/project');
+ * console.log(`Parsed ${result.conversations.length} conversations`);
+ * console.log(`Found ${result.messages.length} messages`);
+ * console.log(`Extracted ${result.tool_uses.length} tool uses`);
+ * ```
  */
 
 import { readFileSync, readdirSync, existsSync } from "fs";
@@ -138,19 +160,56 @@ export interface ThinkingBlock {
   timestamp: number;
 }
 
+/**
+ * Result of parsing conversation history.
+ *
+ * Contains all extracted entities from conversation files.
+ */
 export interface ParseResult {
+  /** Parsed conversations with metadata */
   conversations: Conversation[];
+  /** All messages from conversations */
   messages: Message[];
+  /** Tool invocations extracted from assistant messages */
   tool_uses: ToolUse[];
+  /** Results from tool executions */
   tool_results: ToolResult[];
+  /** File edit records from snapshots */
   file_edits: FileEdit[];
+  /** Thinking blocks (Claude's internal reasoning) */
   thinking_blocks: ThinkingBlock[];
-  indexed_folders?: string[]; // Folders that were actually indexed
+  /** Folders that were actually indexed */
+  indexed_folders?: string[];
 }
 
+/**
+ * Parser for Claude Code conversation history.
+ *
+ * Extracts structured data from JSONL conversation files stored in
+ * ~/.claude/projects. Handles both modern and legacy naming conventions.
+ */
 export class ConversationParser {
   /**
-   * Parse all conversations for a project
+   * Parse all conversations for a project.
+   *
+   * Searches for conversation files in Claude's storage directories and
+   * parses them into structured entities. Supports filtering by session ID
+   * and handles both modern and legacy directory naming conventions.
+   *
+   * @param projectPath - Absolute path to the project
+   * @param sessionId - Optional session ID to filter for a single conversation
+   * @returns ParseResult containing all extracted entities
+   *
+   * @example
+   * ```typescript
+   * const parser = new ConversationParser();
+   *
+   * // Parse all conversations
+   * const allResults = parser.parseProject('/Users/me/my-project');
+   *
+   * // Parse specific session
+   * const sessionResults = parser.parseProject('/Users/me/my-project', 'session-123');
+   * ```
    */
   parseProject(projectPath: string, sessionId?: string): ParseResult {
     console.log(`Parsing conversations for project: ${projectPath}`);
