@@ -4,6 +4,25 @@
 
 import chalk from "chalk";
 import { getSQLiteManager } from "../storage/SQLiteManager.js";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * Get version from package.json
+ */
+function getVersion(): string {
+  try {
+    const packageJsonPath = join(__dirname, "..", "..", "package.json");
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+    return packageJson.version;
+  } catch (_error) {
+    return "unknown";
+  }
+}
 
 /**
  * Show welcome message
@@ -11,9 +30,11 @@ import { getSQLiteManager } from "../storage/SQLiteManager.js";
 export function showWelcome() {
   const dbPath = getSQLiteManager().getStats().dbPath;
   const shortPath = dbPath.replace(process.env.HOME || "", "~");
+  const version = getVersion();
+  const versionText = `Claude Conversation Memory v${version}`.padEnd(55);
 
   console.log(chalk.cyan("┌─────────────────────────────────────────────────────────┐"));
-  console.log(chalk.cyan("│") + " Claude Conversation Memory v0.2.0                       " + chalk.cyan("│"));
+  console.log(chalk.cyan("│") + ` ${versionText} ` + chalk.cyan("│"));
   console.log(chalk.cyan("│") + ` Database: ${shortPath.padEnd(39)} ` + chalk.cyan("│"));
   console.log(chalk.cyan("│") + " Type 'help' for commands or 'exit' to quit             " + chalk.cyan("│"));
   console.log(chalk.cyan("└─────────────────────────────────────────────────────────┘"));
@@ -24,8 +45,9 @@ export function showWelcome() {
  * Show main help screen
  */
 export function showHelp(): string {
+  const version = getVersion();
   return `
-${chalk.bold("Claude Conversation Memory v0.2.0 - Interactive CLI")}
+${chalk.bold(`Claude Conversation Memory v${version} - Interactive CLI`)}
 
 ${chalk.bold("CATEGORIES:")}
 
@@ -72,6 +94,10 @@ ${chalk.yellow("📖 Help:")}
 
 ${chalk.yellow("🚪 Exit:")}
   ${chalk.green("exit")}           Exit REPL
+
+${chalk.bold("COMMAND LINE OPTIONS:")}
+  ${chalk.green("--version, -v")}   Show version and exit
+  ${chalk.green("--server")}        Run as MCP server
 
 Type ${chalk.cyan("'help <command>'")} for detailed command help.
 Examples: ${chalk.cyan("help search")}, ${chalk.cyan("help index")}

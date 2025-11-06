@@ -8,6 +8,25 @@ import { ToolHandlers } from "../tools/ToolHandlers.js";
 import { getSQLiteManager } from "../storage/SQLiteManager.js";
 import { showHelp, showCommandHelp } from "./help.js";
 import { ConfigManager } from "../embeddings/ConfigManager.js";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * Get version from package.json
+ */
+function getVersion(): string {
+  try {
+    const packageJsonPath = join(__dirname, "..", "..", "package.json");
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+    return packageJson.version;
+  } catch (_error) {
+    return "unknown";
+  }
+}
 
 /**
  * Parse command line arguments
@@ -70,7 +89,7 @@ export async function executeCommand(
 
   // Handle version
   if (command === "version") {
-    return chalk.cyan("Claude Conversation Memory v0.2.0");
+    return chalk.cyan(`Claude Conversation Memory v${getVersion()}`);
   }
 
   // Handle status/stats

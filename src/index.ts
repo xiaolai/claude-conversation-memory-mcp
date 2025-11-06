@@ -7,12 +7,36 @@
 
 import { ConversationMemoryServer } from "./mcp-server.js";
 import { ConversationMemoryCLI } from "./cli/index.js";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * Get version from package.json
+ */
+function getVersion(): string {
+  try {
+    const packageJsonPath = join(__dirname, "..", "package.json");
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+    return packageJson.version;
+  } catch (_error) {
+    return "unknown";
+  }
+}
 
 /**
  * Detect mode based on arguments and environment
  */
-function detectMode(): "mcp" | "cli" | "single-command" {
+function detectMode(): "mcp" | "cli" | "single-command" | "version" {
   const args = process.argv.slice(2);
+
+  // If --version or -v flag is present, show version
+  if (args.includes("--version") || args.includes("-v")) {
+    return "version";
+  }
 
   // If --server flag is present, run MCP server mode
   if (args.includes("--server")) {
@@ -41,6 +65,13 @@ async function main() {
   const args = process.argv.slice(2).filter((arg) => arg !== "--server");
 
   switch (mode) {
+    case "version": {
+      // Show version
+      console.log(`claude-conversation-memory-mcp v${getVersion()}`);
+      process.exit(0);
+      break;
+    }
+
     case "mcp": {
       // MCP Server Mode (for Claude Code CLI integration)
       const mcpServer = new ConversationMemoryServer();
