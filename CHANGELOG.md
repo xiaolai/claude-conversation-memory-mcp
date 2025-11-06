@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2025-01-06
+
+### Added
+
+- **New `recall_and_apply` Tool** - Context transfer for "remember X, now do Y based on that" workflows
+  - Recalls multiple context types in one call: conversations, decisions, mistakes, file_changes, commits
+  - Filters by query, file_path, date_range, and context_types
+  - Returns structured recalled context with application suggestions
+  - Provides context_summary showing what was found
+  - Generates actionable suggestions for applying recalled context
+  - Optimized for AI workflows requiring historical context
+
+### Use Cases
+
+- "Recall how we implemented authentication, now add OAuth support using that same pattern"
+- "Remember the bug we fixed in parser.ts, check if similar issue exists in lexer.ts"
+- "Recall all decisions about database schema, now design the migration strategy"
+- "Find mistakes we made with async/await, avoid them in this new async function"
+
+### Technical Details
+
+- 220+ lines of new handler logic
+- Integrates with existing search, decisions, mistakes, commits infrastructure
+- Supports selective context types for performance
+- Backward compatible with all existing tools
+- 0 errors, 0 warnings, 147 tests passing
+
 ## [0.5.0] - 2025-01-06
 
 ### Added

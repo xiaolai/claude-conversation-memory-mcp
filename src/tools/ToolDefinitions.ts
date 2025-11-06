@@ -241,6 +241,44 @@ export const TOOLS = {
     },
   },
 
+  recall_and_apply: {
+    name: "recall_and_apply",
+    description: "Recall relevant past context (conversations, decisions, mistakes, file changes) and format it for applying to current work. Use this when you need to 'remember when we did X' and 'now do Y based on that'. Returns structured context optimized for context transfer workflows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "What to recall (e.g., 'how we implemented authentication', 'the bug we fixed in parser', 'decisions about database schema')",
+        },
+        context_types: {
+          type: "array",
+          description: "Types of context to include: 'conversations', 'decisions', 'mistakes', 'file_changes', 'commits'. Default: all types",
+          items: {
+            type: "string",
+            enum: ["conversations", "decisions", "mistakes", "file_changes", "commits"]
+          },
+          default: ["conversations", "decisions", "mistakes", "file_changes", "commits"],
+        },
+        file_path: {
+          type: "string",
+          description: "Optional: focus on a specific file",
+        },
+        date_range: {
+          type: "array",
+          description: "Optional: limit to time range [start_timestamp, end_timestamp]",
+          items: { type: "number" },
+        },
+        limit: {
+          type: "number",
+          description: "Maximum results per context type (default: 5)",
+          default: 5,
+        },
+      },
+      required: ["query"],
+    },
+  },
+
   generate_documentation: {
     name: "generate_documentation",
     description: "Generate comprehensive project documentation by combining codebase analysis (CODE-GRAPH-RAG-MCP) with conversation history. Shows WHAT exists in code and WHY it was built that way.",

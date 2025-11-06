@@ -459,7 +459,243 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 11: generate_documentation
+   * Tool 11: recall_and_apply
+   * Recall relevant context and format for application to current work
+   */
+  async recallAndApply(args: Record<string, unknown>): Promise<Types.RecallAndApplyResponse> {
+    const typedArgs = args as unknown as Types.RecallAndApplyArgs;
+    const { query, context_types = ["conversations", "decisions", "mistakes", "file_changes", "commits"], file_path, date_range, limit = 5 } = typedArgs;
+
+    const recalled: Types.RecalledContext = {};
+    let totalItems = 0;
+    const suggestions: string[] = [];
+
+    // 1. Recall conversations if requested
+    if (context_types.includes("conversations")) {
+      const searchResults = await this.memory.search(query, limit);
+      // Apply date filter if provided
+      const filteredResults = date_range
+        ? searchResults.filter(r => r.message.timestamp >= date_range[0] && r.message.timestamp <= date_range[1])
+        : searchResults;
+
+      recalled.conversations = filteredResults.map(result => ({
+        session_id: result.conversation.id || "unknown",
+        timestamp: new Date(result.message.timestamp).toISOString(),
+        snippet: result.snippet,
+        relevance_score: result.similarity,
+      }));
+      totalItems += recalled.conversations.length;
+
+      if (recalled.conversations.length > 0) {
+        suggestions.push(`Review ${recalled.conversations.length} past conversation(s) about similar topics`);
+      }
+    }
+
+    // 2. Recall decisions if requested
+    if (context_types.includes("decisions")) {
+      const decisions = this.db.getDatabase()
+        .prepare(`
+          SELECT decision_id, type, description, rationale, alternatives, rejected_approaches, affects_components, timestamp
+          FROM decisions
+          WHERE description LIKE ? ${file_path ? 'AND affects_components LIKE ?' : ''}
+          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
+          ORDER BY timestamp DESC
+          LIMIT ?
+        `)
+        .all(
+          `%${sanitizeForLike(query)}%`,
+          ...(file_path ? [`%${sanitizeForLike(file_path)}%`] : []),
+          ...(date_range ? [date_range[0], date_range[1]] : []),
+          limit
+        ) as Array<{
+          decision_id: string;
+          type: string;
+          description: string;
+          rationale: string | null;
+          alternatives: string | null;
+          rejected_approaches: string | null;
+          affects_components: string;
+          timestamp: number;
+        }>;
+
+      recalled.decisions = decisions.map(d => ({
+        decision_id: d.decision_id,
+        type: d.type,
+        description: d.description,
+        rationale: d.rationale || undefined,
+        alternatives: d.alternatives ? JSON.parse(d.alternatives) : undefined,
+        rejected_approaches: d.rejected_approaches ? JSON.parse(d.rejected_approaches) : undefined,
+        affects_components: JSON.parse(d.affects_components),
+        timestamp: new Date(d.timestamp).toISOString(),
+      }));
+      totalItems += recalled.decisions.length;
+
+      if (recalled.decisions.length > 0) {
+        suggestions.push(`Apply learnings from ${recalled.decisions.length} past decision(s) with documented rationale`);
+      }
+    }
+
+    // 3. Recall mistakes if requested
+    if (context_types.includes("mistakes")) {
+      const mistakes = this.db.getDatabase()
+        .prepare(`
+          SELECT mistake_id, type, description, what_happened, how_fixed, lesson_learned, files_affected, timestamp
+          FROM mistakes
+          WHERE description LIKE ? OR what_happened LIKE ? ${file_path ? 'AND files_affected LIKE ?' : ''}
+          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
+          ORDER BY timestamp DESC
+          LIMIT ?
+        `)
+        .all(
+          `%${sanitizeForLike(query)}%`,
+          `%${sanitizeForLike(query)}%`,
+          ...(file_path ? [`%${sanitizeForLike(file_path)}%`] : []),
+          ...(date_range ? [date_range[0], date_range[1]] : []),
+          limit
+        ) as Array<{
+          mistake_id: string;
+          type: string;
+          description: string;
+          what_happened: string;
+          how_fixed: string | null;
+          lesson_learned: string | null;
+          files_affected: string;
+          timestamp: number;
+        }>;
+
+      recalled.mistakes = mistakes.map(m => ({
+        mistake_id: m.mistake_id,
+        type: m.type,
+        description: m.description,
+        what_happened: m.what_happened,
+        how_fixed: m.how_fixed || undefined,
+        lesson_learned: m.lesson_learned || undefined,
+        files_affected: JSON.parse(m.files_affected),
+        timestamp: new Date(m.timestamp).toISOString(),
+      }));
+      totalItems += recalled.mistakes.length;
+
+      if (recalled.mistakes.length > 0) {
+        suggestions.push(`Avoid repeating ${recalled.mistakes.length} documented mistake(s) from the past`);
+      }
+    }
+
+    // 4. Recall file changes if requested
+    if (context_types.includes("file_changes") && file_path) {
+      const fileChanges = this.db.getDatabase()
+        .prepare(`
+          SELECT
+            file_path,
+            COUNT(DISTINCT conversation_id) as change_count,
+            MAX(timestamp) as last_modified,
+            GROUP_CONCAT(DISTINCT conversation_id) as conversation_ids
+          FROM messages
+          WHERE file_path LIKE ?
+          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
+          GROUP BY file_path
+          ORDER BY last_modified DESC
+          LIMIT ?
+        `)
+        .all(
+          `%${sanitizeForLike(file_path)}%`,
+          ...(date_range ? [date_range[0], date_range[1]] : []),
+          limit
+        ) as Array<{
+          file_path: string;
+          change_count: number;
+          last_modified: number;
+          conversation_ids: string;
+        }>;
+
+      recalled.file_changes = fileChanges.map(fc => ({
+        file_path: fc.file_path,
+        change_count: fc.change_count,
+        last_modified: new Date(fc.last_modified).toISOString(),
+        related_conversations: fc.conversation_ids.split(','),
+      }));
+      totalItems += recalled.file_changes.length;
+
+      if (recalled.file_changes.length > 0) {
+        suggestions.push(`Consider ${recalled.file_changes.length} file(s) with relevant history before making changes`);
+      }
+    }
+
+    // 5. Recall commits if requested
+    if (context_types.includes("commits")) {
+      const commits = this.db.getDatabase()
+        .prepare(`
+          SELECT commit_hash, message, timestamp, files_affected
+          FROM commits
+          WHERE message LIKE ? ${file_path ? 'AND files_affected LIKE ?' : ''}
+          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
+          ORDER BY timestamp DESC
+          LIMIT ?
+        `)
+        .all(
+          `%${sanitizeForLike(query)}%`,
+          ...(file_path ? [`%${sanitizeForLike(file_path)}%`] : []),
+          ...(date_range ? [date_range[0], date_range[1]] : []),
+          limit
+        ) as Array<{
+          commit_hash: string;
+          message: string;
+          timestamp: number;
+          files_affected: string;
+        }>;
+
+      recalled.commits = commits.map(c => ({
+        commit_hash: c.commit_hash,
+        message: c.message,
+        timestamp: new Date(c.timestamp).toISOString(),
+        files_affected: JSON.parse(c.files_affected),
+      }));
+      totalItems += recalled.commits.length;
+
+      if (recalled.commits.length > 0) {
+        suggestions.push(`Reference ${recalled.commits.length} related git commit(s) for implementation patterns`);
+      }
+    }
+
+    // Generate context summary
+    const summaryParts: string[] = [];
+    if (recalled.conversations && recalled.conversations.length > 0) {
+      summaryParts.push(`${recalled.conversations.length} relevant conversation(s)`);
+    }
+    if (recalled.decisions && recalled.decisions.length > 0) {
+      summaryParts.push(`${recalled.decisions.length} decision(s)`);
+    }
+    if (recalled.mistakes && recalled.mistakes.length > 0) {
+      summaryParts.push(`${recalled.mistakes.length} past mistake(s)`);
+    }
+    if (recalled.file_changes && recalled.file_changes.length > 0) {
+      summaryParts.push(`${recalled.file_changes.length} file change(s)`);
+    }
+    if (recalled.commits && recalled.commits.length > 0) {
+      summaryParts.push(`${recalled.commits.length} commit(s)`);
+    }
+
+    const contextSummary = summaryParts.length > 0
+      ? `Recalled: ${summaryParts.join(', ')}`
+      : 'No relevant context found';
+
+    // Add general suggestion if we found context
+    if (totalItems > 0) {
+      suggestions.push(`Use this historical context to inform your current implementation`);
+    } else {
+      suggestions.push(`No historical context found - you may be working on something new`);
+    }
+
+    return {
+      query,
+      context_summary: contextSummary,
+      recalled_context: recalled,
+      application_suggestions: suggestions,
+      total_items_found: totalItems,
+    };
+  }
+
+  /**
+   * Tool 12: generate_documentation
    */
   async generateDocumentation(args: Record<string, unknown>): Promise<Types.GenerateDocumentationResponse> {
     const typedArgs = args as unknown as Types.GenerateDocumentationArgs;

@@ -103,6 +103,10 @@ export class ConversationMemoryServer {
             result = await this.handlers.findSimilarSessions(args as Record<string, unknown>);
             break;
 
+          case "recall_and_apply":
+            result = await this.handlers.recallAndApply(args as Record<string, unknown>);
+            break;
+
           case "generate_documentation":
             result = await this.handlers.generateDocumentation(args as Record<string, unknown>);
             break;

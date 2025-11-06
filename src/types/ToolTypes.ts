@@ -266,6 +266,63 @@ export interface FindSimilarSessionsResponse {
   total_found: number;
 }
 
+export interface RecallAndApplyArgs {
+  query: string;
+  context_types?: Array<"conversations" | "decisions" | "mistakes" | "file_changes" | "commits">;
+  file_path?: string;
+  date_range?: [number, number];
+  limit?: number;
+}
+
+export interface RecalledContext {
+  conversations?: Array<{
+    session_id: string;
+    timestamp: string;
+    snippet: string;
+    relevance_score?: number;
+  }>;
+  decisions?: Array<{
+    decision_id: string;
+    type: string;
+    description: string;
+    rationale?: string;
+    alternatives?: string[];
+    rejected_approaches?: string[];
+    affects_components: string[];
+    timestamp: string;
+  }>;
+  mistakes?: Array<{
+    mistake_id: string;
+    type: string;
+    description: string;
+    what_happened: string;
+    how_fixed?: string;
+    lesson_learned?: string;
+    files_affected: string[];
+    timestamp: string;
+  }>;
+  file_changes?: Array<{
+    file_path: string;
+    change_count: number;
+    last_modified: string;
+    related_conversations: string[];
+  }>;
+  commits?: Array<{
+    commit_hash: string;
+    message: string;
+    timestamp: string;
+    files_affected: string[];
+  }>;
+}
+
+export interface RecallAndApplyResponse {
+  query: string;
+  context_summary: string; // High-level summary of what was recalled
+  recalled_context: RecalledContext;
+  application_suggestions: string[]; // Suggested ways to apply this context
+  total_items_found: number;
+}
+
 export interface GenerateDocumentationResponse {
   success: boolean;
   project_path: string;
