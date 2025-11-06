@@ -118,6 +118,21 @@ Start Claude Code CLI and ask:
 
 If you see a response like "Indexed 3 conversations with 1247 messages", it's working!
 
+### Important: Restarting After Updates
+
+**When you upgrade to a new version**, you MUST restart Claude Code CLI to reload the MCP server:
+
+1. Exit Claude Code CLI completely
+2. Start it again
+3. The new version will be loaded
+
+**Why?** Claude Code caches MCP servers. Without restarting, it will continue using the old cached version even after you've upgraded the npm package globally.
+
+**Quick check**: After restart, you can verify the version with:
+```bash
+claude-conversation-memory-mcp --version
+```
+
 ## 🖥️ Standalone CLI / REPL Mode
 
 Beyond the MCP server, this package includes a powerful **standalone CLI** for managing your conversation memory directly from the terminal.
