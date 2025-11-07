@@ -27,7 +27,7 @@ export class ConversationMemoryServer {
     this.server = new Server(
       {
         name: "claude-conversation-memory",
-        version: "0.2.0",
+        version: "1.1.0",
       },
       {
         capabilities: {
