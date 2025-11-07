@@ -4,6 +4,9 @@
  * in Claude Code's global configuration (~/.claude.json)
  */
 
+/* eslint-env node */
+/* eslint-disable no-console */
+
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
