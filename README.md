@@ -59,6 +59,10 @@ Claude Code CLI is required because it stores conversation history in `~/.claude
 npm install -g claude-conversation-memory-mcp
 ```
 
+**🎉 Automatic Configuration**: The global installation will automatically configure the MCP server in Claude Code's `~/.claude.json` file. You'll see a success message when it's done!
+
+**Manual Configuration** (if needed): If automatic configuration doesn't work, see the [Configure Claude Code CLI](#configure-claude-code-cli) section below.
+
 **Discover Available Models:**
 After installation, you can see all available embedding models and their dimensions:
 - Run the CLI: `claude-conversation-memory-mcp`
