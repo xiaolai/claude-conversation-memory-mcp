@@ -18,7 +18,7 @@ import { rmSync } from 'fs';
 import { join } from 'path';
 
 // Skip Transformers tests in CI due to environment compatibility issues
-const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+const isCI = Boolean(process.env.CI) || Boolean(process.env.GITHUB_ACTIONS);
 
 describe('Regression Tests - Baseline Functionality', () => {
   let testDbPath: string;
