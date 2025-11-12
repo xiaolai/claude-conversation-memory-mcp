@@ -1,0 +1,34 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# prepare-commit-msg hook
+# Reminds developers to update CHANGELOG.md for significant changes
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# Only run for regular commits (not merge, squash, etc.)
+if [ "$COMMIT_SOURCE" = "" ] || [ "$COMMIT_SOURCE" = "message" ]; then
+  # Check if this looks like a release commit
+  if grep -q "^Release v[0-9]" "$COMMIT_MSG_FILE" 2>/dev/null || \
+     grep -q "^version [0-9]" "$COMMIT_MSG_FILE" 2>/dev/null; then
+
+    # Check if CHANGELOG.md was modified in staged changes
+    if ! git diff --cached --name-only | grep -q "CHANGELOG.md"; then
+      # Add reminder comment to commit message
+      cat >> "$COMMIT_MSG_FILE" << 'EOF'
+
+# ⚠️  CHANGELOG REMINDER
+# This looks like a release commit, but CHANGELOG.md is not staged.
+#
+# Please update CHANGELOG.md with:
+# - Version number and release date
+# - Added/Changed/Fixed/Removed sections
+# - Breaking changes (if any)
+#
+# Then stage it: git add CHANGELOG.md
+# Or skip this reminder: git commit --no-verify
+EOF
+    fi
+  fi
+fi

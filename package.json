@@ -29,6 +29,7 @@
     "docs": "typedoc --out docs src",
     "test:watch": "npm test -- --watch",
     "test:coverage": "npm test -- --coverage",
+    "changelog:check": "bash scripts/changelog-check.sh",
     "pre-push": "npm run type-check && npm run lint && npm run build",
     "prepublishOnly": "npm run build",
     "prepare": "husky"
