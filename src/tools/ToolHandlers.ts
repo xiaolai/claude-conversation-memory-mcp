@@ -932,37 +932,35 @@ export class ToolHandlers {
     if (context_types.includes("mistakes")) {
       const mistakes = this.db.getDatabase()
         .prepare(`
-          SELECT mistake_id, type, description, what_happened, how_fixed, lesson_learned, files_affected, timestamp
+          SELECT id, mistake_type, what_went_wrong, correction, user_correction_message, files_affected, timestamp
           FROM mistakes
-          WHERE description LIKE ? OR what_happened LIKE ? ${file_path ? 'AND files_affected LIKE ?' : ''}
+          WHERE what_went_wrong LIKE ? ${file_path ? 'AND files_affected LIKE ?' : ''}
           ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
           ORDER BY timestamp DESC
           LIMIT ?
         `)
         .all(
           `%${sanitizeForLike(query)}%`,
-          `%${sanitizeForLike(query)}%`,
           ...(file_path ? [`%${sanitizeForLike(file_path)}%`] : []),
           ...(date_range ? [date_range[0], date_range[1]] : []),
           limit
         ) as Array<{
-          mistake_id: string;
-          type: string;
-          description: string;
-          what_happened: string;
-          how_fixed: string | null;
-          lesson_learned: string | null;
+          id: string;
+          mistake_type: string;
+          what_went_wrong: string;
+          correction: string | null;
+          user_correction_message: string | null;
           files_affected: string;
           timestamp: number;
         }>;
 
       recalled.mistakes = mistakes.map(m => ({
-        mistake_id: m.mistake_id,
-        type: m.type,
-        description: m.description,
-        what_happened: m.what_happened,
-        how_fixed: m.how_fixed || undefined,
-        lesson_learned: m.lesson_learned || undefined,
+        mistake_id: m.id,
+        type: m.mistake_type,
+        description: m.what_went_wrong,
+        what_happened: m.what_went_wrong,
+        how_fixed: m.correction || undefined,
+        lesson_learned: m.user_correction_message || undefined,
         files_affected: JSON.parse(m.files_affected),
         timestamp: new Date(m.timestamp).toISOString(),
       }));

@@ -83,6 +83,11 @@ ${chalk.yellow("⚙️ Config:")}
   ${chalk.green("set")}            Set config value
   ${chalk.green("get")}            Get config value
 
+${chalk.yellow("🔧 MCP Setup:")}
+  ${chalk.green("init-mcp")}       Configure MCP in ~/.claude.json
+  ${chalk.green("remove-mcp")}     Remove MCP configuration
+  ${chalk.green("mcp-status")}     Check MCP configuration status
+
 ${chalk.yellow("🧹 Maintenance:")}
   ${chalk.green("clear")}          Clear screen
   ${chalk.green("reset")}          Reset database
@@ -285,6 +290,85 @@ ${chalk.bold("ALIASES:")}
 
 ${chalk.bold("SEE ALSO:")}
   None
+`,
+
+    "init-mcp": `
+${chalk.bold("COMMAND:")} init-mcp
+
+${chalk.bold("USAGE:")}
+  init-mcp
+
+${chalk.bold("DESCRIPTION:")}
+  Automatically configure the conversation-memory MCP server in
+  Claude Code's global configuration (~/.claude.json).
+
+  This command:
+  - Checks if Claude Code is installed
+  - Creates a backup of your configuration
+  - Adds the MCP server to the mcpServers section
+  - Provides helpful status messages
+
+${chalk.bold("EXAMPLES:")}
+  init-mcp
+
+${chalk.bold("ALIASES:")}
+  None
+
+${chalk.bold("SEE ALSO:")}
+  remove-mcp, mcp-status
+`,
+
+    "remove-mcp": `
+${chalk.bold("COMMAND:")} remove-mcp
+
+${chalk.bold("USAGE:")}
+  remove-mcp
+
+${chalk.bold("DESCRIPTION:")}
+  Remove the conversation-memory MCP server from Claude Code's
+  global configuration (~/.claude.json).
+
+  This command:
+  - Confirms before removal
+  - Creates a backup of your configuration
+  - Removes the MCP server entry
+  - Provides instructions for next steps
+
+${chalk.bold("EXAMPLES:")}
+  remove-mcp
+
+${chalk.bold("ALIASES:")}
+  None
+
+${chalk.bold("SEE ALSO:")}
+  init-mcp, mcp-status
+`,
+
+    "mcp-status": `
+${chalk.bold("COMMAND:")} mcp-status
+
+${chalk.bold("USAGE:")}
+  mcp-status
+
+${chalk.bold("DESCRIPTION:")}
+  Display comprehensive status information about the MCP server
+  configuration and installation.
+
+  Shows:
+  - Whether ~/.claude.json exists
+  - Whether MCP server is configured
+  - Whether command is installed globally
+  - Current configuration details
+  - Helpful recommendations if issues found
+
+${chalk.bold("EXAMPLES:")}
+  mcp-status
+
+${chalk.bold("ALIASES:")}
+  None
+
+${chalk.bold("SEE ALSO:")}
+  init-mcp, remove-mcp
 `,
   };
 

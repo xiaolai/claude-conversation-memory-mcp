@@ -239,6 +239,21 @@ export async function executeCommand(
     return showHelp();
   }
 
+  // Handle init-mcp
+  if (command === "init-mcp") {
+    return await handleInitMcp();
+  }
+
+  // Handle remove-mcp
+  if (command === "remove-mcp") {
+    return await handleRemoveMcp();
+  }
+
+  // Handle mcp-status
+  if (command === "mcp-status") {
+    return handleMcpStatus();
+  }
+
   // Unknown command
   return chalk.yellow(`Unknown command: ${command}\nType 'help' for available commands.`);
 }
@@ -1048,4 +1063,142 @@ async function handleSelectModel(): Promise<string> {
     }
     return chalk.red(`Error: ${(error as Error).message}`);
   }
+}
+
+/**
+ * Handle init-mcp command - Configure MCP server in ~/.claude.json
+ */
+async function handleInitMcp(): Promise<string> {
+  const { isMcpConfigured, addMcpServer } = await import("../utils/McpConfig.js");
+
+  try {
+    const { configured, configPath } = isMcpConfigured();
+
+    if (configured) {
+      return chalk.yellow(`✓ MCP server is already configured in ${configPath}\n`) +
+             chalk.dim("  Use 'mcp-status' to see configuration details\n");
+    }
+
+    // Configure the MCP server
+    addMcpServer();
+
+    let output = chalk.green("✅ Successfully configured conversation-memory MCP server!\n\n");
+    output += chalk.cyan("Configuration added to: ") + chalk.white(`${configPath}\n\n`);
+    output += chalk.bold("🎉 Available MCP Tools:\n");
+    output += chalk.dim("   • index_conversations      - Index conversation history\n");
+    output += chalk.dim("   • search_conversations     - Search past conversations\n");
+    output += chalk.dim("   • get_decisions            - Find design decisions\n");
+    output += chalk.dim("   • check_before_modify      - Check file context before editing\n");
+    output += chalk.dim("   • get_file_evolution       - Track file changes over time\n");
+    output += chalk.dim("   • and 10 more tools...\n\n");
+    output += chalk.yellow("💡 Restart Claude Code to load the new MCP server\n");
+    output += chalk.dim("   Run '/mcp' in Claude Code to list all available tools\n");
+
+    return output;
+  } catch (error) {
+    return chalk.red(`❌ Failed to configure MCP server: ${(error as Error).message}\n\n`) +
+           chalk.yellow("Manual configuration:\n") +
+           chalk.dim("  Add this to ~/.claude.json under \"mcpServers\":\n") +
+           chalk.dim("  {\n") +
+           chalk.dim("    \"conversation-memory\": {\n") +
+           chalk.dim("      \"type\": \"stdio\",\n") +
+           chalk.dim("      \"command\": \"claude-conversation-memory-mcp\",\n") +
+           chalk.dim("      \"args\": []\n") +
+           chalk.dim("    }\n") +
+           chalk.dim("  }\n");
+  }
+}
+
+/**
+ * Handle remove-mcp command - Remove MCP server configuration
+ */
+async function handleRemoveMcp(): Promise<string> {
+  const { isMcpConfigured, removeMcpServer } = await import("../utils/McpConfig.js");
+  const prompts = (await import("prompts")).default;
+
+  try {
+    const { configured, configPath } = isMcpConfigured();
+
+    if (!configured) {
+      return chalk.yellow("⚠️  MCP server is not configured\n") +
+             chalk.dim("  Nothing to remove\n");
+    }
+
+    // Confirm removal
+    const response = await prompts({
+      type: "confirm",
+      name: "confirm",
+      message: `Remove conversation-memory MCP server from ${configPath}?`,
+      initial: false,
+    });
+
+    if (!response.confirm) {
+      return chalk.yellow("Removal cancelled\n");
+    }
+
+    // Remove the MCP server
+    removeMcpServer();
+
+    let output = chalk.green("✅ Successfully removed conversation-memory MCP server\n\n");
+    output += chalk.cyan("Configuration removed from: ") + chalk.white(`${configPath}\n\n`);
+    output += chalk.yellow("💡 Restart Claude Code to apply changes\n");
+    output += chalk.dim("   Run 'init-mcp' to reconfigure if needed\n");
+
+    return output;
+  } catch (error) {
+    if ((error as { message?: string }).message === "User force closed the prompt") {
+      return chalk.yellow("\nRemoval cancelled");
+    }
+    return chalk.red(`❌ Failed to remove MCP server: ${(error as Error).message}\n`);
+  }
+}
+
+/**
+ * Handle mcp-status command - Show MCP server configuration status
+ */
+function handleMcpStatus(): string {
+  const { getMcpStatus } = require("../utils/McpConfig.js");
+
+  const status = getMcpStatus();
+
+  const table = new Table({
+    head: [chalk.cyan("Status"), chalk.cyan("Value")],
+    colWidths: [30, 50],
+  });
+
+  table.push(
+    ["Claude Config Exists", status.claudeConfigExists ? chalk.green("✓ Yes") : chalk.red("✗ No")],
+    ["MCP Server Configured", status.mcpConfigured ? chalk.green("✓ Yes") : chalk.yellow("✗ No")],
+    ["Command Installed", status.commandExists ? chalk.green("✓ Yes") : chalk.yellow("✗ No")]
+  );
+
+  if (status.commandPath) {
+    table.push(["Command Path", chalk.dim(status.commandPath)]);
+  }
+
+  if (status.serverConfig) {
+    table.push(
+      ["Server Type", chalk.dim(status.serverConfig.type)],
+      ["Server Command", chalk.dim(status.serverConfig.command)]
+    );
+  }
+
+  let output = "\n" + table.toString() + "\n";
+
+  // Add recommendations
+  if (!status.claudeConfigExists) {
+    output += "\n" + chalk.yellow("⚠️  Claude Code configuration not found at ~/.claude.json\n");
+    output += chalk.dim("   Please install Claude Code first: https://claude.ai/download\n");
+  } else if (!status.mcpConfigured) {
+    output += "\n" + chalk.yellow("⚠️  MCP server is not configured\n");
+    output += chalk.dim("   Run 'init-mcp' to configure automatically\n");
+  } else if (!status.commandExists) {
+    output += "\n" + chalk.yellow("⚠️  Command not found in global npm bin\n");
+    output += chalk.dim("   Reinstall: npm install -g claude-conversation-memory-mcp\n");
+  } else {
+    output += "\n" + chalk.green("✅ Everything looks good! MCP server is ready to use.\n");
+    output += chalk.dim("   Restart Claude Code if you haven't already\n");
+  }
+
+  return output;
 }
