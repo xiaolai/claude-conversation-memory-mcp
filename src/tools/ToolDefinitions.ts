@@ -200,7 +200,7 @@ export const TOOLS = {
 
   get_tool_history: {
     name: "get_tool_history",
-    description: "Query history of tool uses (bash commands, file edits, reads, etc.).",
+    description: "Query history of tool uses (bash commands, file edits, reads, etc.) with pagination, filtering, and content control. Returns metadata about tool uses with optional content truncation to stay within token limits. Use include_content=false for quick overview of many tools, or enable with max_content_length to control response size.",
     inputSchema: {
       type: "object",
       properties: {
@@ -210,12 +210,45 @@ export const TOOLS = {
         },
         file_path: {
           type: "string",
-          description: "Optional: filter by file path",
+          description: "Optional: filter by file path (searches in tool parameters)",
         },
         limit: {
           type: "number",
-          description: "Maximum number of results (default: 20)",
+          description: "Maximum number of results per page (default: 20)",
           default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        include_content: {
+          type: "boolean",
+          description: "Include tool result content, stdout, stderr (default: true). Set false for metadata-only response (tool names, timestamps, success/failure status).",
+          default: true,
+        },
+        max_content_length: {
+          type: "number",
+          description: "Maximum characters per content field before truncation (default: 500). Truncated fields are marked with content_truncated flag.",
+          default: 500,
+        },
+        date_range: {
+          type: "array",
+          description: "Optional: filter by timestamp range [start_timestamp, end_timestamp]. Use Date.now() for current time.",
+          items: {
+            type: "number",
+          },
+          minItems: 2,
+          maxItems: 2,
+        },
+        conversation_id: {
+          type: "string",
+          description: "Optional: filter by specific conversation session ID",
+        },
+        errors_only: {
+          type: "boolean",
+          description: "Optional: show only tool uses that resulted in errors (default: false)",
+          default: false,
         },
       },
     },

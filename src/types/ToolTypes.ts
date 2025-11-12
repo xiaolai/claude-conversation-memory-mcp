@@ -57,6 +57,12 @@ export interface GetToolHistoryArgs {
   tool_name?: string;
   file_path?: string;
   limit?: number;
+  offset?: number;
+  include_content?: boolean;
+  max_content_length?: number;
+  date_range?: [number, number];
+  conversation_id?: string;
+  errors_only?: boolean;
 }
 
 export interface FindSimilarSessionsArgs {
@@ -233,6 +239,9 @@ export interface ToolUseResult {
     is_error: boolean;
     stdout?: string;
     stderr?: string;
+    content_truncated?: boolean;
+    stdout_truncated?: boolean;
+    stderr_truncated?: boolean;
   };
   timestamp: string;
 }
@@ -241,7 +250,10 @@ export interface GetToolHistoryResponse {
   tool_name?: string;
   file_path?: string;
   tool_uses: ToolUseResult[];
-  total_found: number;
+  total_found: number; // Number of results returned in this page
+  total_in_database: number; // Total matching records in database
+  has_more: boolean; // Whether more results exist beyond current page
+  offset: number; // Current offset position
 }
 
 export interface RelevantMessage {

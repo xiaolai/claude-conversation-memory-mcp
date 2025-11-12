@@ -651,7 +651,7 @@ export class ToolHandlers {
   }
 
   /**
-   * Query history of tool uses (bash commands, file edits, reads, etc.).
+   * Query history of tool uses (bash commands, file edits, reads, etc.) with pagination and filtering.
    *
    * Shows what tools were used during conversations and their results. Useful
    * for understanding what commands were run, what files were edited, and
@@ -661,78 +661,179 @@ export class ToolHandlers {
    * - `tool_name`: Optional filter by tool name (Bash, Edit, Write, Read)
    * - `file_path`: Optional filter by file path
    * - `limit`: Maximum number of results (default: 20)
+   * - `offset`: Skip N results for pagination (default: 0)
+   * - `include_content`: Include tool content in response (default: true, false for metadata only)
+   * - `max_content_length`: Maximum characters per content field (default: 500)
+   * - `date_range`: Filter by timestamp range [start, end]
+   * - `conversation_id`: Filter by specific conversation
+   * - `errors_only`: Show only failed tool uses (default: false)
    *
    * @returns Tool history containing:
    * - `tool_name`: Tool filter if applied
    * - `file_path`: File filter if applied
-   * - `tool_uses`: Array of tool uses with:
-   *   - `tool_use_id`: Tool use identifier
-   *   - `tool_name`: Name of the tool used
-   *   - `tool_input`: Input parameters to the tool
-   *   - `result`: Tool execution result with:
-   *     - `content`: Result content
-   *     - `is_error`: Whether the tool failed
-   *     - `stdout`: Standard output (for Bash)
-   *     - `stderr`: Standard error (for Bash)
-   *   - `timestamp`: When the tool was used
-   * - `total_found`: Number of tool uses returned
+   * - `tool_uses`: Array of tool uses (may have truncated content)
+   * - `total_found`: Number of results returned in this page
+   * - `total_in_database`: Total matching records in database
+   * - `has_more`: Whether more results exist beyond current page
+   * - `offset`: Current offset position
    *
    * @example
    * ```typescript
-   * const history = await handlers.getToolHistory({
+   * // Get first page of Bash commands
+   * const page1 = await handlers.getToolHistory({
    *   tool_name: 'Bash',
-   *   limit: 10
+   *   limit: 20,
+   *   offset: 0
    * });
-   * history.tool_uses.forEach(t => {
-   *   console.log(`${t.tool_name}: ${JSON.stringify(t.tool_input)}`);
-   *   console.log(`Success: ${!t.result.is_error}`);
+   *
+   * // Get metadata only (no content)
+   * const metadata = await handlers.getToolHistory({
+   *   include_content: false,
+   *   limit: 50
+   * });
+   *
+   * // Get errors from last 24 hours
+   * const errors = await handlers.getToolHistory({
+   *   errors_only: true,
+   *   date_range: [Date.now() - 86400000, Date.now()]
    * });
    * ```
    */
   async getToolHistory(args: Record<string, unknown>): Promise<Types.GetToolHistoryResponse> {
     const typedArgs = args as Types.GetToolHistoryArgs;
-    const { tool_name, file_path, limit = 20 } = typedArgs;
+    const {
+      tool_name,
+      file_path,
+      limit = 20,
+      offset = 0,
+      include_content = true,
+      max_content_length = 500,
+      date_range,
+      conversation_id,
+      errors_only = false,
+    } = typedArgs;
 
-    let sql = `
-      SELECT tu.*, tr.content as result_content, tr.is_error, tr.stdout, tr.stderr
-      FROM tool_uses tu
-      LEFT JOIN tool_results tr ON tu.id = tr.tool_use_id
-      WHERE 1=1
-    `;
+    // Helper function to truncate text with indicator
+    const truncateText = (text: string | null | undefined, maxLength: number): { value?: string; truncated: boolean } => {
+      if (!text) {
+        return { value: undefined, truncated: false };
+      }
+      if (text.length <= maxLength) {
+        return { value: text, truncated: false };
+      }
+      return {
+        value: text.substring(0, maxLength) + '... (truncated)',
+        truncated: true,
+      };
+    };
+
+    // Build WHERE clause for filters
+    let whereClause = "WHERE 1=1";
     const params: (string | number)[] = [];
 
     if (tool_name) {
-      sql += " AND tu.tool_name = ?";
+      whereClause += " AND tu.tool_name = ?";
       params.push(tool_name);
     }
 
     if (file_path) {
       const sanitized = sanitizeForLike(file_path);
-      sql += " AND tu.tool_input LIKE ? ESCAPE '\\'";
+      whereClause += " AND tu.tool_input LIKE ? ESCAPE '\\'";
       params.push(`%${sanitized}%`);
     }
 
-    sql += " ORDER BY tu.timestamp DESC LIMIT ?";
-    params.push(limit);
+    if (date_range && date_range.length === 2) {
+      whereClause += " AND tu.timestamp BETWEEN ? AND ?";
+      params.push(date_range[0], date_range[1]);
+    }
 
-    const toolUses = this.db.prepare(sql).all(...params) as Types.ToolUseRow[];
+    if (conversation_id) {
+      whereClause += " AND tu.message_id IN (SELECT id FROM messages WHERE conversation_id = ?)";
+      params.push(conversation_id);
+    }
+
+    if (errors_only) {
+      whereClause += " AND tr.is_error = 1";
+    }
+
+    // Get total count of matching records
+    const countSql = `
+      SELECT COUNT(*) as total
+      FROM tool_uses tu
+      LEFT JOIN tool_results tr ON tu.id = tr.tool_use_id
+      ${whereClause}
+    `;
+    const countResult = this.db.prepare(countSql).get(...params) as { total: number };
+    const totalInDatabase = countResult.total;
+
+    // Get paginated results
+    const sql = `
+      SELECT tu.*, tr.content as result_content, tr.is_error, tr.stdout, tr.stderr
+      FROM tool_uses tu
+      LEFT JOIN tool_results tr ON tu.id = tr.tool_use_id
+      ${whereClause}
+      ORDER BY tu.timestamp DESC
+      LIMIT ? OFFSET ?
+    `;
+    const queryParams = [...params, limit, offset];
+    const toolUses = this.db.prepare(sql).all(...queryParams) as Types.ToolUseRow[];
+
+    // Calculate pagination metadata
+    const hasMore = offset + toolUses.length < totalInDatabase;
 
     return {
       tool_name,
       file_path,
-      tool_uses: toolUses.map((t) => ({
-        tool_use_id: t.id,
-        tool_name: t.tool_name,
-        tool_input: JSON.parse(t.tool_input || "{}"),
-        result: {
-          content: t.result_content,
+      tool_uses: toolUses.map((t) => {
+        // Parse tool input
+        const toolInput = JSON.parse(t.tool_input || "{}");
+
+        // Build result object based on include_content setting
+        const result: Types.ToolUseResult['result'] = {
           is_error: Boolean(t.is_error),
-          stdout: t.stdout,
-          stderr: t.stderr,
-        },
-        timestamp: new Date(t.timestamp).toISOString(),
-      })),
+        };
+
+        if (include_content) {
+          // Truncate content fields if they exist
+          const contentTrunc = truncateText(t.result_content, max_content_length);
+          const stdoutTrunc = truncateText(t.stdout, max_content_length);
+          const stderrTrunc = truncateText(t.stderr, max_content_length);
+
+          if (contentTrunc.value !== undefined) {
+            result.content = contentTrunc.value;
+            if (contentTrunc.truncated) {
+              result.content_truncated = true;
+            }
+          }
+
+          if (stdoutTrunc.value !== undefined) {
+            result.stdout = stdoutTrunc.value;
+            if (stdoutTrunc.truncated) {
+              result.stdout_truncated = true;
+            }
+          }
+
+          if (stderrTrunc.value !== undefined) {
+            result.stderr = stderrTrunc.value;
+            if (stderrTrunc.truncated) {
+              result.stderr_truncated = true;
+            }
+          }
+        }
+        // If include_content=false, only return is_error (no content, stdout, stderr)
+
+        return {
+          tool_use_id: t.id,
+          tool_name: t.tool_name,
+          tool_input: toolInput,
+          result,
+          timestamp: new Date(t.timestamp).toISOString(),
+        };
+      }),
       total_found: toolUses.length,
+      total_in_database: totalInDatabase,
+      has_more: hasMore,
+      offset,
     };
   }
 

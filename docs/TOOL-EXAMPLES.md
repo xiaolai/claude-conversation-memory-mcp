@@ -203,24 +203,93 @@ Natural language examples showing how users interact with each tool in Claude Co
 
 ## 9. 🛠️ get_tool_history
 
-**What it does**: Shows history of tool usage (Edit, Bash, Read, etc.)
+**What it does**: Shows history of tool usage (Edit, Bash, Read, etc.) with pagination, filtering, and content control
+
+### New Features:
+- **Pagination**: Use `offset` + `limit` to fetch results in pages
+- **Content Control**: Use `include_content=false` for metadata-only, or set `max_content_length` to truncate large outputs
+- **Smart Filtering**: Filter by date range, conversation, or errors only
+- **Response Size Management**: Keeps responses under token limits for AI consumption
 
 ### Example Conversations:
 
 **User**: "Show me all the files we edited recently"
 **Claude**: *Queries tool_history for Edit operations, shows 10 recent edits*
+```typescript
+await get_tool_history({ tool_name: 'Edit', limit: 10 })
+```
 
 **User**: "What bash commands did we run in the last session?"
 **Claude**: *Filters by tool_name: Bash, shows command history with outputs*
+```typescript
+await get_tool_history({
+  tool_name: 'Bash',
+  conversation_id: 'current-session-id',
+  limit: 20
+})
+```
 
-**User**: "Which files have we been reading the most?"
-**Claude**: *Analyzes Read tool usage, shows most-accessed files*
+**User**: "Show me just the names of the last 50 tools we used, no content"
+**Claude**: *Uses summary mode for quick overview*
+```typescript
+await get_tool_history({
+  limit: 50,
+  include_content: false  // Metadata only - tool names, timestamps, success/failure
+})
+```
 
-**User**: "Show me the last 20 git commands we ran"
-**Claude**: *Filters Bash history for git commands*
+**User**: "Find all errors from the last 24 hours"
+**Claude**: *Filters by errors and date range*
+```typescript
+const oneDayAgo = Date.now() - 86400000;
+await get_tool_history({
+  errors_only: true,
+  date_range: [oneDayAgo, Date.now()],
+  limit: 20
+})
+```
+
+**User**: "Show me the next page of results"
+**Claude**: *Uses pagination to get second page*
+```typescript
+// First page
+const page1 = await get_tool_history({ limit: 20, offset: 0 });
+// Second page
+const page2 = await get_tool_history({ limit: 20, offset: 20 });
+// Check if more pages exist
+if (page1.has_more) {
+  console.log(`${page1.total_in_database} total results available`);
+}
+```
 
 **User**: "What changes did we make to the database schema?"
-**Claude**: *Shows Edit operations on schema.sql file*
+**Claude**: *Shows Edit operations on schema.sql file with truncated content*
+```typescript
+await get_tool_history({
+  tool_name: 'Edit',
+  file_path: 'schema.sql',
+  max_content_length: 500,  // Truncate large file contents
+  limit: 10
+})
+```
+
+### Response Format:
+```json
+{
+  "tool_uses": [...],
+  "total_found": 20,           // Results in this page
+  "total_in_database": 156,    // Total matching records
+  "has_more": true,            // More pages available
+  "offset": 0                  // Current page offset
+}
+```
+
+### Pro Tips:
+- Use `include_content=false` when you need to scan many tools quickly (e.g., finding which files were edited)
+- Set `max_content_length` to control response size (default: 500 characters)
+- Use `date_range` to limit scope before fetching (reduces noise)
+- Check `has_more` and `total_in_database` to know if you need pagination
+- Combine filters for precise queries (e.g., errors in specific conversation from yesterday)
 
 ---
 

@@ -200,14 +200,18 @@ describe('ToolHandlers', () => {
   });
 
   describe('getToolHistory', () => {
-    it('should return tool usage history', async () => {
+    it('should return tool usage history with pagination metadata', async () => {
       const result = await handlers.getToolHistory({
         limit: 20,
       });
 
       expect(result).toHaveProperty('tool_uses');
       expect(result).toHaveProperty('total_found');
+      expect(result).toHaveProperty('total_in_database');
+      expect(result).toHaveProperty('has_more');
+      expect(result).toHaveProperty('offset');
       expect(Array.isArray(result.tool_uses)).toBe(true);
+      expect(result.offset).toBe(0);
     });
 
     it('should filter by tool_name when provided', async () => {
@@ -226,6 +230,115 @@ describe('ToolHandlers', () => {
       });
 
       expect(result.file_path).toBe('src/index.ts');
+    });
+
+    it('should support pagination with offset', async () => {
+      const page1 = await handlers.getToolHistory({
+        limit: 5,
+        offset: 0,
+      });
+
+      const page2 = await handlers.getToolHistory({
+        limit: 5,
+        offset: 5,
+      });
+
+      expect(page1.offset).toBe(0);
+      expect(page2.offset).toBe(5);
+      // Both pages should have same total_in_database
+      expect(page1.total_in_database).toBe(page2.total_in_database);
+    });
+
+    it('should truncate content when max_content_length is set', async () => {
+      const result = await handlers.getToolHistory({
+        limit: 20,
+        max_content_length: 50,
+        include_content: true,
+      });
+
+      // Check if any results have content
+      const withContent = result.tool_uses.filter(t => t.result.content);
+      if (withContent.length > 0) {
+        withContent.forEach(tool => {
+          // Content should be <= max_content_length + truncation indicator length
+          if (tool.result.content) {
+            expect(tool.result.content.length).toBeLessThanOrEqual(100); // 50 + "... (truncated)"
+          }
+          // If content was truncated, should have flag
+          if (tool.result.content_truncated) {
+            expect(tool.result.content).toContain('... (truncated)');
+          }
+        });
+      }
+    });
+
+    it('should return metadata only when include_content is false', async () => {
+      const result = await handlers.getToolHistory({
+        limit: 20,
+        include_content: false,
+      });
+
+      // Should not have content, stdout, stderr fields
+      result.tool_uses.forEach(tool => {
+        expect(tool.result.content).toBeUndefined();
+        expect(tool.result.stdout).toBeUndefined();
+        expect(tool.result.stderr).toBeUndefined();
+        // Should still have is_error
+        expect(tool.result).toHaveProperty('is_error');
+      });
+    });
+
+    it('should filter by date_range when provided', async () => {
+      const now = Date.now();
+      const oneDayAgo = now - 86400000;
+
+      const result = await handlers.getToolHistory({
+        date_range: [oneDayAgo, now],
+        limit: 20,
+      });
+
+      expect(result).toHaveProperty('tool_uses');
+      // All results should be within range
+      result.tool_uses.forEach(tool => {
+        const timestamp = new Date(tool.timestamp).getTime();
+        expect(timestamp).toBeGreaterThanOrEqual(oneDayAgo);
+        expect(timestamp).toBeLessThanOrEqual(now);
+      });
+    });
+
+    it('should filter by errors_only when provided', async () => {
+      const result = await handlers.getToolHistory({
+        errors_only: true,
+        limit: 20,
+      });
+
+      // All results should be errors
+      result.tool_uses.forEach(tool => {
+        expect(tool.result.is_error).toBe(true);
+      });
+    });
+
+    it('should calculate has_more correctly', async () => {
+      const result = await handlers.getToolHistory({
+        limit: 5,
+        offset: 0,
+      });
+
+      // has_more should be true if total_in_database > offset + total_found
+      const expectedHasMore = result.total_in_database > (result.offset + result.total_found);
+      expect(result.has_more).toBe(expectedHasMore);
+    });
+
+    it('should handle empty results gracefully', async () => {
+      const result = await handlers.getToolHistory({
+        tool_name: 'NonExistentTool',
+        limit: 20,
+      });
+
+      expect(result.tool_uses).toEqual([]);
+      expect(result.total_found).toBe(0);
+      expect(result.total_in_database).toBe(0);
+      expect(result.has_more).toBe(false);
     });
   });
 
