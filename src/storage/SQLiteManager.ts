@@ -196,18 +196,63 @@ export class SQLiteManager {
         // SQLite can handle multiple statements in a single exec() call
         this.db.exec(schema);
 
-        // Record schema version
+        // Record schema version (current version is 2)
         this.db
           .prepare(
             "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
           )
-          .run(1, Date.now(), "Initial schema");
+          .run(2, Date.now(), "Initial schema with source_type support");
 
         console.log("Database schema initialized successfully");
+      } else {
+        // Apply migrations if needed
+        this.applyMigrations();
       }
     } catch (error) {
       console.error("Error initializing schema:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Apply database migrations for existing databases
+   */
+  private applyMigrations(): void {
+    const currentVersion = this.getSchemaVersion();
+
+    // Migration 1 -> 2: Add source_type column to conversations table
+    if (currentVersion < 2) {
+      try {
+        console.log("Applying migration: Adding source_type column...");
+
+        // Check if column already exists (in case of partial migration)
+        const columns = this.db
+          .prepare("PRAGMA table_info(conversations)")
+          .all() as Array<{ name: string }>;
+
+        const hasSourceType = columns.some((col) => col.name === "source_type");
+
+        if (!hasSourceType) {
+          this.db.exec(
+            "ALTER TABLE conversations ADD COLUMN source_type TEXT DEFAULT 'claude-code'"
+          );
+          this.db.exec(
+            "CREATE INDEX IF NOT EXISTS idx_conv_source ON conversations(source_type)"
+          );
+        }
+
+        // Record migration
+        this.db
+          .prepare(
+            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
+          )
+          .run(2, Date.now(), "Add source_type column and global index support");
+
+        console.log("Migration applied successfully");
+      } catch (error) {
+        console.error("Error applying migration:", error);
+        throw error;
+      }
     }
   }
 

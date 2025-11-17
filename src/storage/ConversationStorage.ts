@@ -150,9 +150,9 @@ export class ConversationStorage {
   async storeConversations(conversations: Conversation[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO conversations
-      (id, project_path, first_message_at, last_message_at, message_count,
+      (id, project_path, source_type, first_message_at, last_message_at, message_count,
        git_branch, claude_version, metadata, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.db.transaction(() => {
@@ -160,6 +160,7 @@ export class ConversationStorage {
         stmt.run(
           conv.id,
           conv.project_path,
+          conv.source_type || 'claude-code',
           conv.first_message_at,
           conv.last_message_at,
           conv.message_count,

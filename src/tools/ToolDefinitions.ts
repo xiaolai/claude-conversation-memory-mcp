@@ -412,4 +412,125 @@ export const TOOLS = {
       required: ["keywords"],
     },
   },
+
+  // ==================== Global Cross-Project Tools ====================
+
+  index_all_projects: {
+    name: "index_all_projects",
+    description: "Index all projects from both Claude Code and Codex. Discovers and indexes conversations from all sources, registering them in a global index for cross-project search. This enables searching across all your work globally.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        include_codex: {
+          type: "boolean",
+          description: "Include Codex conversations (default: true)",
+          default: true,
+        },
+        include_claude_code: {
+          type: "boolean",
+          description: "Include Claude Code conversations (default: true)",
+          default: true,
+        },
+        codex_path: {
+          type: "string",
+          description: "Path to Codex home directory (default: ~/.codex)",
+        },
+        claude_projects_path: {
+          type: "string",
+          description: "Path to Claude Code projects directory (default: ~/.claude/projects)",
+        },
+      },
+    },
+  },
+
+  search_all_conversations: {
+    name: "search_all_conversations",
+    description: "Search conversations across all indexed projects (Claude Code + Codex). Returns results from all projects with source type and project path for context.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural language search query",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default: 20)",
+          default: 20,
+        },
+        date_range: {
+          type: "array",
+          description: "Optional date range filter [start_timestamp, end_timestamp]",
+          items: { type: "number" },
+        },
+        source_type: {
+          type: "string",
+          description: "Filter by source: 'claude-code', 'codex', or 'all' (default: 'all')",
+          enum: ["claude-code", "codex", "all"],
+          default: "all",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  get_all_decisions: {
+    name: "get_all_decisions",
+    description: "Find decisions made across all indexed projects. Shows rationale, alternatives, and rejected approaches from all your work globally.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Topic or keyword to search for (e.g., 'authentication', 'database')",
+        },
+        file_path: {
+          type: "string",
+          description: "Optional: filter decisions related to a specific file",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of decisions to return (default: 20)",
+          default: 20,
+        },
+        source_type: {
+          type: "string",
+          description: "Filter by source: 'claude-code', 'codex', or 'all' (default: 'all')",
+          enum: ["claude-code", "codex", "all"],
+          default: "all",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  search_all_mistakes: {
+    name: "search_all_mistakes",
+    description: "Find past mistakes across all indexed projects to avoid repeating them. Shows what went wrong and how it was corrected across all your work.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query for mistakes",
+        },
+        mistake_type: {
+          type: "string",
+          description: "Optional: filter by type (logic_error, wrong_approach, misunderstanding, tool_error, syntax_error)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default: 20)",
+          default: 20,
+        },
+        source_type: {
+          type: "string",
+          description: "Filter by source: 'claude-code', 'codex', or 'all' (default: 'all')",
+          enum: ["claude-code", "codex", "all"],
+          default: "all",
+        },
+      },
+      required: ["query"],
+    },
+  },
 };

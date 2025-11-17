@@ -10,6 +10,7 @@
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,                    -- sessionId from JSONL
   project_path TEXT NOT NULL,             -- Derived from directory name
+  source_type TEXT DEFAULT 'claude-code', -- 'claude-code' or 'codex'
   first_message_at INTEGER NOT NULL,
   last_message_at INTEGER NOT NULL,
   message_count INTEGER DEFAULT 0,
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conv_project ON conversations(project_path);
+CREATE INDEX IF NOT EXISTS idx_conv_source ON conversations(source_type);
 CREATE INDEX IF NOT EXISTS idx_conv_time ON conversations(last_message_at);
 CREATE INDEX IF NOT EXISTS idx_conv_branch ON conversations(git_branch);
 CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at);
@@ -319,3 +321,27 @@ CREATE TABLE IF NOT EXISTS schema_version (
   description TEXT,
   checksum TEXT
 );
+
+-- ==================================================
+-- GLOBAL INDEX TABLE (for cross-project search)
+-- ==================================================
+
+-- Table 18: Project Metadata (Global registry of all indexed projects)
+CREATE TABLE IF NOT EXISTS project_metadata (
+  id TEXT PRIMARY KEY,                    -- UUID for project entry
+  project_path TEXT NOT NULL UNIQUE,      -- Absolute path to project
+  source_type TEXT NOT NULL,              -- 'claude-code' or 'codex'
+  db_path TEXT NOT NULL,                  -- Path to project's database
+  last_indexed INTEGER NOT NULL,          -- Last indexing timestamp
+  message_count INTEGER DEFAULT 0,        -- Total messages indexed
+  conversation_count INTEGER DEFAULT 0,   -- Total conversations indexed
+  decision_count INTEGER DEFAULT 0,       -- Total decisions indexed
+  mistake_count INTEGER DEFAULT 0,        -- Total mistakes indexed
+  metadata TEXT,                          -- JSON: {git_repo, last_commit, etc}
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_proj_source ON project_metadata(source_type);
+CREATE INDEX IF NOT EXISTS idx_proj_last_indexed ON project_metadata(last_indexed);
+CREATE INDEX IF NOT EXISTS idx_proj_path ON project_metadata(project_path);

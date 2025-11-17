@@ -95,6 +95,7 @@ export interface ConversationMessage {
 export interface Conversation {
   id: string;
   project_path: string;
+  source_type?: 'claude-code' | 'codex';
   first_message_at: number;
   last_message_at: number;
   message_count: number;

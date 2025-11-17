@@ -511,3 +511,99 @@ export interface ForgetByTopicResponse {
   }>;
   message: string;
 }
+
+// ==================== Global Cross-Project Tools ====================
+
+export interface IndexAllProjectsArgs {
+  include_codex?: boolean;
+  include_claude_code?: boolean;
+  codex_path?: string;
+  claude_projects_path?: string;
+}
+
+export interface IndexAllProjectsResponse {
+  success: boolean;
+  global_index_path: string;
+  projects_indexed: number;
+  claude_code_projects: number;
+  codex_projects: number;
+  total_messages: number;
+  total_conversations: number;
+  total_decisions: number;
+  total_mistakes: number;
+  projects: Array<{
+    project_path: string;
+    source_type: 'claude-code' | 'codex';
+    message_count: number;
+    conversation_count: number;
+  }>;
+  errors: Array<{
+    project_path: string;
+    error: string;
+  }>;
+  message: string;
+}
+
+export interface SearchAllConversationsArgs {
+  query: string;
+  limit?: number;
+  date_range?: [number, number];
+  source_type?: 'claude-code' | 'codex' | 'all';
+}
+
+export interface GlobalSearchResult extends SearchResult {
+  project_path: string;
+  source_type: 'claude-code' | 'codex';
+}
+
+export interface SearchAllConversationsResponse {
+  query: string;
+  results: GlobalSearchResult[];
+  total_found: number;
+  projects_searched: number;
+  search_stats: {
+    claude_code_results: number;
+    codex_results: number;
+  };
+  message: string;
+}
+
+export interface GetAllDecisionsArgs {
+  query: string;
+  file_path?: string;
+  limit?: number;
+  source_type?: 'claude-code' | 'codex' | 'all';
+}
+
+export interface GlobalDecision extends DecisionResult {
+  project_path: string;
+  source_type: 'claude-code' | 'codex';
+}
+
+export interface GetAllDecisionsResponse {
+  query: string;
+  decisions: GlobalDecision[];
+  total_found: number;
+  projects_searched: number;
+  message: string;
+}
+
+export interface SearchAllMistakesArgs {
+  query: string;
+  mistake_type?: string;
+  limit?: number;
+  source_type?: 'claude-code' | 'codex' | 'all';
+}
+
+export interface GlobalMistake extends MistakeResult {
+  project_path: string;
+  source_type: 'claude-code' | 'codex';
+}
+
+export interface SearchAllMistakesResponse {
+  query: string;
+  mistakes: GlobalMistake[];
+  total_found: number;
+  projects_searched: number;
+  message: string;
+}

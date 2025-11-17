@@ -123,6 +123,22 @@ export class ConversationMemoryServer {
             result = await this.handlers.forgetByTopic(args as Record<string, unknown>);
             break;
 
+          case "index_all_projects":
+            result = await this.handlers.indexAllProjects(args as Record<string, unknown>);
+            break;
+
+          case "search_all_conversations":
+            result = await this.handlers.searchAllConversations(args as Record<string, unknown>);
+            break;
+
+          case "get_all_decisions":
+            result = await this.handlers.getAllDecisions(args as Record<string, unknown>);
+            break;
+
+          case "search_all_mistakes":
+            result = await this.handlers.searchAllMistakes(args as Record<string, unknown>);
+            break;
+
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
