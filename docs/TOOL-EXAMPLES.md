@@ -1,12 +1,43 @@
 # MCP Tool Usage Examples
 
-Natural language examples showing how users interact with each tool in Claude Code.
+Natural language examples showing how users interact with each tool in Claude Code and Codex.
+
+---
+
+## 📖 Table of Contents
+
+### Per-Project Tools
+1. [📥 index_conversations](#1--index_conversations) - Index current project's conversation history
+2. [🔍 search_conversations](#2--search_conversations) - Search current project's conversations
+3. [🎯 get_decisions](#3--get_decisions) - Get decisions from current project
+4. [📋 check_before_modify](#4--check_before_modify) - Check file context before editing
+5. [📜 get_file_evolution](#5--get_file_evolution) - Track file changes over time
+6. [🔗 link_commits_to_conversations](#6--link_commits_to_conversations) - Link git commits to conversations
+7. [⚠️ search_mistakes](#7--search_mistakes) - Find past mistakes in current project
+8. [📝 get_requirements](#8--get_requirements) - Get requirements for components
+9. [🛠️ get_tool_history](#9--get_tool_history) - Query tool usage history
+10. [🔄 find_similar_sessions](#10--find_similar_sessions) - Find similar conversation sessions
+11. [📚 generate_documentation](#11--generate_documentation) - Generate comprehensive docs
+
+### Global Cross-Project Tools (NEW in v1.5.0)
+12. [🌐 index_all_projects](#12--index_all_projects) - Index all Claude Code + Codex projects
+13. [🔎 search_all_conversations](#13--search_all_conversations) - Search across ALL indexed projects
+14. [🎯🌐 get_all_decisions](#14--get_all_decisions) - Get decisions from all projects
+15. [⚠️🌐 search_all_mistakes](#15--search_all_mistakes) - Search mistakes across all projects
+
+---
+
+# Per-Project Tools
+
+These tools work within the **current project** only. They search and analyze conversation history for the project you're currently working in.
 
 ---
 
 ## 1. 📥 index_conversations
 
-**What it does**: Indexes your conversation history for searching and analysis
+**What it does**: Indexes your conversation history for the current project
+
+**Scope**: Current project only (Claude Code or Codex)
 
 ### Example Conversations:
 
@@ -37,7 +68,9 @@ Natural language examples showing how users interact with each tool in Claude Co
 
 ## 2. 🔍 search_conversations
 
-**What it does**: Semantic search through your conversation history
+**What it does**: Semantic search through the current project's conversation history
+
+**Scope**: Current project only
 
 ### Example Conversations:
 
@@ -57,11 +90,15 @@ Natural language examples showing how users interact with each tool in Claude Co
 **User**: "Show me all conversations about TypeScript linting errors"
 **Claude**: *Returns relevant conversations with context snippets*
 
+**Note**: To search across ALL your projects (not just this one), use [search_all_conversations](#13--search_all_conversations) instead.
+
 ---
 
 ## 3. 🎯 get_decisions
 
-**What it does**: Retrieves architectural and technical decisions with rationale
+**What it does**: Retrieves architectural and technical decisions from current project
+
+**Scope**: Current project only
 
 ### Example Conversations:
 
@@ -81,11 +118,15 @@ Natural language examples showing how users interact with each tool in Claude Co
 **User**: "What were the rejected alternatives for vector storage?"
 **Claude**: *Shows decision with alternatives_considered and why they were rejected*
 
+**Note**: To search decisions across ALL projects, use [get_all_decisions](#14--get_all_decisions) instead.
+
 ---
 
 ## 4. 📋 check_before_modify
 
 **What it does**: Shows context before modifying a file - recent changes, decisions, mistakes
+
+**Scope**: Current project only
 
 ### Example Conversations:
 
@@ -112,6 +153,8 @@ Natural language examples showing how users interact with each tool in Claude Co
 
 **What it does**: Complete timeline of how a file changed - edits, commits, decisions
 
+**Scope**: Current project only
+
 ### Example Conversations:
 
 **User**: "Show me the complete history of README.md"
@@ -134,6 +177,8 @@ Natural language examples showing how users interact with each tool in Claude Co
 ## 6. 🔗 link_commits_to_conversations
 
 **What it does**: Shows git commits and which conversations they came from
+
+**Scope**: Current project only
 
 ### Example Conversations:
 
@@ -158,6 +203,8 @@ Natural language examples showing how users interact with each tool in Claude Co
 
 **What it does**: Finds past mistakes to help you avoid repeating them
 
+**Scope**: Current project only
+
 ### Example Conversations:
 
 **User**: "Have we made any mistakes with path handling before?"
@@ -176,11 +223,15 @@ Natural language examples showing how users interact with each tool in Claude Co
 **User**: "Have we seen this error before?"
 **Claude**: *Searches mistake history for similar error patterns*
 
+**Note**: To search mistakes across ALL your projects, use [search_all_mistakes](#15--search_all_mistakes) instead.
+
 ---
 
 ## 8. 📝 get_requirements
 
 **What it does**: Retrieves documented requirements for components and features
+
+**Scope**: Current project only
 
 ### Example Conversations:
 
@@ -204,6 +255,8 @@ Natural language examples showing how users interact with each tool in Claude Co
 ## 9. 🛠️ get_tool_history
 
 **What it does**: Shows history of tool usage (Edit, Bash, Read, etc.) with pagination, filtering, and content control
+
+**Scope**: Current project only
 
 ### New Features:
 - **Pagination**: Use `offset` + `limit` to fetch results in pages
@@ -297,6 +350,8 @@ await get_tool_history({
 
 **What it does**: Finds past conversation sessions that dealt with similar topics
 
+**Scope**: Current project only
+
 ### Example Conversations:
 
 **User**: "Have we worked on similar bug fixes before?"
@@ -321,6 +376,8 @@ await get_tool_history({
 
 **What it does**: Generates comprehensive documentation combining code structure + conversation context
 
+**Scope**: Current project only
+
 ### Example Conversations:
 
 **User**: "Generate documentation for this project"
@@ -341,9 +398,387 @@ await get_tool_history({
 
 ---
 
-## Combined Usage Examples
+---
 
-### Scenario 1: Starting New Feature
+# 🌐 Global Cross-Project Tools
+
+**NEW in v1.5.0**: These tools search across **ALL your indexed projects**, including both Claude Code CLI and Codex conversations.
+
+### What's Different?
+
+| Feature | Per-Project Tools | Global Tools |
+|---------|------------------|--------------|
+| **Scope** | Current project only | All indexed projects |
+| **Sources** | Claude Code OR Codex | Claude Code AND Codex |
+| **Use Case** | "What did we decide in THIS project?" | "Have I solved this before ANYWHERE?" |
+| **Performance** | Fast (single database) | Moderate (queries multiple databases) |
+
+---
+
+## 12. 🌐 index_all_projects
+
+**What it does**: Index all Claude Code projects and Codex sessions in one operation
+
+**Scope**: Global - creates a registry of all projects
+
+### How It Works:
+
+1. **Scans** `~/.claude/projects/` for all Claude Code projects
+2. **Scans** `~/.codex/sessions/` for all Codex sessions
+3. **Creates** a global registry at `~/.claude/.claude-global-index.db`
+4. **Tracks** metadata: project paths, database locations, message counts, source types
+
+### Example Conversations:
+
+**User**: "Index all my projects globally"
+**Claude**: *Scans both Claude Code and Codex, creates global registry*
+```typescript
+await index_all_projects({
+  include_claude_code: true,
+  include_codex: true
+})
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "global_index_path": "/Users/you/.claude/.claude-global-index.db",
+  "projects_indexed": 12,
+  "claude_code_projects": 8,
+  "codex_projects": 4,
+  "total_messages": 3456,
+  "total_conversations": 234,
+  "errors": []
+}
+```
+
+**User**: "Index only my Claude Code projects"
+**Claude**: *Skips Codex, indexes Claude Code projects only*
+```typescript
+await index_all_projects({
+  include_claude_code: true,
+  include_codex: false
+})
+```
+
+**User**: "Index only my Codex sessions"
+**Claude**: *Skips Claude Code, indexes Codex only*
+```typescript
+await index_all_projects({
+  include_claude_code: false,
+  include_codex: true
+})
+```
+
+**User**: "Rebuild my global index from scratch"
+**Claude**: *Re-scans all projects and updates global registry*
+
+### When to Use:
+
+✅ **First time setup** - After installing the MCP
+✅ **After creating new projects** - Update the global registry
+✅ **After working with Codex** - Ensure Codex sessions are indexed
+✅ **Periodic refresh** - Weekly/monthly to keep registry fresh
+
+### Notes:
+
+- Each project keeps its own database (per-project isolation)
+- Global index is just a **registry** that links to project databases
+- Re-running is safe - it updates existing entries
+- Projects without conversations are still registered (message_count: 0)
+
+---
+
+## 13. 🔎 search_all_conversations
+
+**What it does**: Semantic search across ALL indexed projects (Claude Code + Codex)
+
+**Scope**: Global - searches every project in the registry
+
+### How It Works:
+
+1. **Queries** the global registry for all indexed projects
+2. **Opens** each project's database (read-only)
+3. **Searches** each project's conversations using semantic search
+4. **Merges** results from all projects with similarity scores
+5. **Enriches** results with project metadata (project_path, source_type)
+
+### Example Conversations:
+
+**User**: "Search all my conversations for 'authentication bug fixes'"
+**Claude**: *Searches across 12 projects, finds 8 relevant conversations*
+```typescript
+await search_all_conversations({
+  query: "authentication bug fixes",
+  limit: 10
+})
+```
+
+**Response**:
+```json
+{
+  "query": "authentication bug fixes",
+  "results": [
+    {
+      "conversation_id": "abc123",
+      "message_id": "msg456",
+      "timestamp": "2025-01-15T10:30:00.000Z",
+      "similarity": 0.89,
+      "snippet": "Fixed JWT token validation bug...",
+      "git_branch": "main",
+      "message_type": "assistant",
+      "role": "assistant",
+      "project_path": "/Users/you/projects/api-server",
+      "source_type": "claude-code"
+    },
+    {
+      "conversation_id": "xyz789",
+      "message_id": "msg012",
+      "timestamp": "2025-01-10T14:20:00.000Z",
+      "similarity": 0.85,
+      "snippet": "Implemented OAuth2 authentication...",
+      "git_branch": "feature/oauth",
+      "message_type": "user",
+      "role": "user",
+      "project_path": "/Users/you/.codex",
+      "source_type": "codex"
+    }
+  ],
+  "total_found": 8,
+  "projects_searched": 12,
+  "claude_code_projects": 8,
+  "codex_projects": 4
+}
+```
+
+**User**: "Find all conversations about React hooks from the last month"
+**Claude**: *Searches with date range filter*
+```typescript
+const oneMonthAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+await search_all_conversations({
+  query: "React hooks",
+  limit: 20,
+  date_range: [oneMonthAgo, Date.now()]
+})
+```
+
+**User**: "Have I ever worked with WebSockets before?"
+**Claude**: *Semantic search across all projects finds WebSocket-related conversations*
+```typescript
+await search_all_conversations({
+  query: "WebSocket implementation real-time communication",
+  limit: 10
+})
+```
+
+**User**: "Show me all conversations where I discussed database migrations"
+**Claude**: *Searches all projects, returns top 15 matches*
+```typescript
+await search_all_conversations({
+  query: "database migrations schema changes",
+  limit: 15
+})
+```
+
+### When to Use:
+
+✅ **Cross-project learning** - "Have I solved this before?"
+✅ **Finding past solutions** - "How did I implement X last time?"
+✅ **Discovering patterns** - "Where have I used this approach?"
+✅ **Knowledge transfer** - "Did I learn about this in another project?"
+✅ **Historical context** - "When did I last work on similar features?"
+
+### Pro Tips:
+
+- Results include `source_type` - see if it's from Claude Code or Codex
+- Results include `project_path` - know which project the conversation is from
+- Use specific queries - "JWT token validation" vs "authentication"
+- Filter by date to focus on recent work
+- Similarity scores help rank relevance (higher = more relevant)
+
+---
+
+## 14. 🎯🌐 get_all_decisions
+
+**What it does**: Retrieves architectural and technical decisions from ALL indexed projects
+
+**Scope**: Global - searches decisions across all projects
+
+**Status**: ⚠️ **STUB IMPLEMENTATION** (Coming Soon)
+
+### Planned Functionality:
+
+When fully implemented, this tool will:
+
+1. **Query** all project databases for decision records
+2. **Filter** by topic, file path, or decision type
+3. **Merge** decisions from Claude Code and Codex projects
+4. **Rank** by relevance to your query
+5. **Show** full decision context (rationale, alternatives, rejected approaches)
+
+### Example Use Cases (Planned):
+
+**User**: "What decisions have I made about database design across all projects?"
+**Claude**: *Would search all projects for database-related decisions*
+```typescript
+// Planned API
+await get_all_decisions({
+  query: "database design schema architecture",
+  limit: 15
+})
+```
+
+**Expected Response**:
+```json
+{
+  "query": "database design schema architecture",
+  "decisions": [
+    {
+      "decision_id": "dec123",
+      "conversation_id": "abc456",
+      "timestamp": "2025-01-10T10:00:00.000Z",
+      "decision_type": "architecture",
+      "topic": "Database schema design",
+      "decision": "Use PostgreSQL with JSONB for flexible data",
+      "rationale": "Need flexible schema with relational guarantees",
+      "alternatives_considered": ["MongoDB", "DynamoDB"],
+      "rejected_reasons": "MongoDB lacks transactions, DynamoDB vendor lock-in",
+      "project_path": "/Users/you/projects/api-server",
+      "source_type": "claude-code"
+    }
+  ],
+  "total_found": 8,
+  "projects_searched": 12
+}
+```
+
+**User**: "Show me all decisions about authentication from any project"
+**Claude**: *Would search all projects for authentication decisions*
+
+**User**: "What have I decided about testing strategies?"
+**Claude**: *Would find test-related decisions across all work*
+
+### Current Behavior:
+
+Returns a stub response:
+```json
+{
+  "query": "your query",
+  "decisions": [],
+  "total_found": 0,
+  "projects_searched": 12,
+  "message": "Cross-project decision search not yet implemented. Currently shows decisions from current project only. Use get_decisions() for per-project decision retrieval."
+}
+```
+
+### Implementation Status:
+
+- ✅ Global index system (completed)
+- ✅ Cross-project search infrastructure (completed)
+- ⏳ Decision extraction across projects (planned)
+- ⏳ Decision merging and ranking (planned)
+
+---
+
+## 15. ⚠️🌐 search_all_mistakes
+
+**What it does**: Search for past mistakes across ALL indexed projects
+
+**Scope**: Global - finds mistakes from all projects to avoid repeating them
+
+**Status**: ⚠️ **STUB IMPLEMENTATION** (Coming Soon)
+
+### Planned Functionality:
+
+When fully implemented, this tool will:
+
+1. **Query** all project databases for mistake records
+2. **Search** semantically for similar error patterns
+3. **Filter** by mistake type (logic_error, wrong_approach, etc.)
+4. **Show** what went wrong and how it was corrected
+5. **Prevent** repeating mistakes from other projects
+
+### Example Use Cases (Planned):
+
+**User**: "Have I made mistakes with async/await in any project?"
+**Claude**: *Would search all projects for async-related mistakes*
+```typescript
+// Planned API
+await search_all_mistakes({
+  query: "async await promise handling",
+  limit: 10
+})
+```
+
+**Expected Response**:
+```json
+{
+  "query": "async await promise handling",
+  "mistakes": [
+    {
+      "mistake_id": "mst123",
+      "conversation_id": "abc456",
+      "timestamp": "2024-12-15T14:30:00.000Z",
+      "mistake_type": "logic_error",
+      "description": "Forgot to await database query in transaction",
+      "what_went_wrong": "Transaction committed before query completed",
+      "correction": "Added await keyword before query execution",
+      "file_path": "src/db/transactions.ts",
+      "project_path": "/Users/you/projects/api-server",
+      "source_type": "claude-code"
+    }
+  ],
+  "total_found": 5,
+  "projects_searched": 12
+}
+```
+
+**User**: "Show me all TypeScript type errors I've made anywhere"
+**Claude**: *Would search all projects, filter by mistake_type: syntax_error*
+```typescript
+await search_all_mistakes({
+  query: "TypeScript type errors",
+  mistake_type: "syntax_error",
+  limit: 15
+})
+```
+
+**User**: "What mistakes have I made with React hooks?"
+**Claude**: *Would find React hook mistakes across all projects*
+
+**User**: "Have I encountered this error message before in any project?"
+**Claude**: *Would search mistake descriptions semantically*
+
+### Current Behavior:
+
+Returns a stub response:
+```json
+{
+  "query": "your query",
+  "mistakes": [],
+  "total_found": 0,
+  "projects_searched": 12,
+  "message": "Cross-project mistake search not yet implemented. Currently shows mistakes from current project only. Use search_mistakes() for per-project mistake retrieval."
+}
+```
+
+### Implementation Status:
+
+- ✅ Global index system (completed)
+- ✅ Cross-project search infrastructure (completed)
+- ⏳ Mistake extraction across projects (planned)
+- ⏳ Mistake similarity search (planned)
+
+---
+
+---
+
+# Combined Usage Examples
+
+## Per-Project Scenarios
+
+### Scenario 1: Starting New Feature (Single Project)
 
 **User**: "I want to add a new caching layer. Have we done anything similar before?"
 
@@ -354,7 +789,7 @@ await get_tool_history({
 
 ---
 
-### Scenario 2: Debugging
+### Scenario 2: Debugging (Single Project)
 
 **User**: "The vector search is failing. What do I need to know?"
 
@@ -366,7 +801,7 @@ await get_tool_history({
 
 ---
 
-### Scenario 3: Code Review
+### Scenario 3: Code Review (Single Project)
 
 **User**: "Review the changes I'm about to commit"
 
@@ -378,7 +813,7 @@ await get_tool_history({
 
 ---
 
-### Scenario 4: Onboarding
+### Scenario 4: Onboarding (Single Project)
 
 **User**: "Explain how this project works"
 
@@ -390,9 +825,200 @@ await get_tool_history({
 
 ---
 
-## Tips for Users
+## Global Cross-Project Scenarios
 
-### Best Practices
+### Scenario 5: Global Learning (Multi-Project)
+
+**User**: "Have I ever implemented authentication before? I need to add it to this new project."
+
+**Claude**:
+1. *Uses search_all_conversations* - Searches all projects for "authentication implementation"
+2. **Finds**:
+   - OAuth2 implementation in api-server (Claude Code, 3 months ago)
+   - JWT authentication in mobile-backend (Codex, 6 months ago)
+3. *Uses get_all_decisions* (when implemented) - "Decided on JWT for stateless auth in mobile-backend"
+4. *Uses search_all_mistakes* (when implemented) - "Watch out: forgot to validate token expiry in api-server"
+
+**Result**: User learns from 2 previous projects across both Claude Code and Codex
+
+---
+
+### Scenario 6: Cross-Project Pattern Discovery (Multi-Project)
+
+**User**: "I'm implementing WebSocket real-time updates. How have I done this before?"
+
+**Claude**:
+1. *Uses search_all_conversations*:
+   ```typescript
+   await search_all_conversations({
+     query: "WebSocket real-time updates socket.io",
+     limit: 10
+   })
+   ```
+2. **Finds**:
+   - Chat application (Claude Code, chat-app project, 2 months ago)
+   - Live dashboard (Codex, dashboard project, 4 months ago)
+3. **Shows**: Code snippets, architectural decisions, performance optimizations
+
+**Result**: User discovers patterns from 2 different implementations
+
+---
+
+### Scenario 7: Avoiding Past Mistakes Globally (Multi-Project)
+
+**User**: "I'm about to use async/await with database transactions. Have I made mistakes with this before?"
+
+**Claude**:
+1. *Uses search_all_mistakes* (when implemented):
+   ```typescript
+   await search_all_mistakes({
+     query: "async await database transaction",
+     mistake_type: "logic_error",
+     limit: 5
+   })
+   ```
+2. **Finds**:
+   - api-server: Forgot to await in transaction (caused race condition)
+   - e-commerce: Used nested transactions incorrectly (deadlock)
+3. **Shows**: What went wrong, how it was corrected
+
+**Result**: User avoids repeating mistakes from 2 previous projects
+
+---
+
+### Scenario 8: Technology Decision Research (Multi-Project)
+
+**User**: "Should I use PostgreSQL or MongoDB for this new project? What have I decided before?"
+
+**Claude**:
+1. *Uses get_all_decisions* (when implemented):
+   ```typescript
+   await get_all_decisions({
+     query: "database choice PostgreSQL MongoDB",
+     limit: 10
+   })
+   ```
+2. **Finds**:
+   - api-server: Chose PostgreSQL (needed ACID, complex queries)
+   - content-platform: Chose MongoDB (flexible schema, rapid iteration)
+3. **Shows**: Rationale, alternatives considered, rejected reasons
+
+**Result**: User makes informed decision based on past experience
+
+---
+
+### Scenario 9: First-Time Setup (Hybrid Workflow)
+
+**User**: "I just installed the MCP. What do I need to do?"
+
+**Claude**:
+1. *Suggests*: "Let me index all your existing work first"
+2. *Uses index_all_projects*:
+   ```typescript
+   await index_all_projects({
+     include_claude_code: true,
+     include_codex: true
+   })
+   ```
+3. **Result**:
+   - 8 Claude Code projects indexed
+   - 4 Codex sessions indexed
+   - Global registry created at `~/.claude/.claude-global-index.db`
+   - Ready for cross-project search
+
+**User**: "Now search all my work for 'database migrations'"
+
+**Claude**:
+4. *Uses search_all_conversations*:
+   ```typescript
+   await search_all_conversations({
+     query: "database migration schema changes",
+     limit: 10
+   })
+   ```
+5. **Finds**: 6 conversations across 3 projects (2 Claude Code, 1 Codex)
+
+**Result**: User can now leverage ALL their past work across both platforms
+
+---
+
+### Scenario 10: Periodic Refresh (Maintenance)
+
+**User**: "I've been working with Codex all week. Update my global index."
+
+**Claude**:
+1. *Uses index_all_projects*:
+   ```typescript
+   await index_all_projects({
+     include_claude_code: true,
+     include_codex: true
+   })
+   ```
+2. **Result**:
+   - 8 Claude Code projects (unchanged)
+   - 4 Codex sessions → **6 Codex sessions** (2 new sessions added)
+   - Total messages: 3456 → 3678 (+222 new messages)
+
+**Result**: Global index now includes this week's Codex work
+
+---
+
+## Hybrid Workflow Examples
+
+### Example 1: Claude Code → Codex Knowledge Transfer
+
+**Scenario**: You implemented a feature in Claude Code 2 months ago. Now you're working in Codex on a similar feature.
+
+**Workflow**:
+1. Working in Codex on new project
+2. Ask: "Have I built a pagination system before?"
+3. Claude uses `search_all_conversations`
+4. **Finds**: Pagination implementation in Claude Code project from 2 months ago
+5. **Transfers knowledge**: Shows code approach, decisions, mistakes to avoid
+
+**Result**: Codex session benefits from Claude Code history
+
+---
+
+### Example 2: Codex → Claude Code Knowledge Transfer
+
+**Scenario**: You solved a tricky bug in Codex last month. Now you encounter similar bug in Claude Code.
+
+**Workflow**:
+1. Working in Claude Code, encounter bug
+2. Ask: "Have I seen this error message before?"
+3. Claude uses `search_all_mistakes` (when implemented)
+4. **Finds**: Similar bug in Codex session from last month
+5. **Shows**: How it was debugged and fixed
+
+**Result**: Claude Code session benefits from Codex history
+
+---
+
+### Example 3: Unified Decision Making
+
+**Scenario**: You need to make an architectural decision. Want to see what you've decided in ALL past projects.
+
+**Workflow**:
+1. Ask: "What have I decided about state management in React?"
+2. Claude uses `get_all_decisions` (when implemented)
+3. **Finds**:
+   - Claude Code project A: Chose Redux (large app, complex state)
+   - Codex session B: Chose Context API (small app, simple state)
+   - Claude Code project C: Chose Zustand (medium app, good DX)
+4. **Shows**: Rationale for each choice, project characteristics
+
+**Result**: Make informed decision based on complete history across both platforms
+
+---
+
+---
+
+# Tips for Users
+
+## Best Practices
+
+### Per-Project Tools
 
 ✅ **Do**: Use natural language - "What did we decide about X?"
 ✅ **Do**: Ask follow-up questions - "Show me more details"
@@ -403,32 +1029,154 @@ await get_tool_history({
 ❌ **Don't**: Worry about exact keywords (semantic search works)
 ❌ **Don't**: Repeat indexing unnecessarily (auto-indexed on changes)
 
-### Common Patterns
+### Global Tools (NEW)
 
-**Before Modifying Code**:
+✅ **Do**: Use global search when starting new work - "Have I done this before?"
+✅ **Do**: Index all projects first - Run `index_all_projects` after installation
+✅ **Do**: Refresh periodically - Re-run `index_all_projects` weekly/monthly
+✅ **Do**: Check `source_type` in results - Know if it's Claude Code or Codex
+✅ **Do**: Use date filters for recent work - `date_range` parameter
+
+❌ **Don't**: Expect instant results - Global search queries multiple databases
+❌ **Don't**: Forget to index new projects - Run `index_all_projects` after creating projects
+❌ **Don't**: Mix per-project and global - Know which scope you need
+
+---
+
+## Common Patterns
+
+### Before Modifying Code (Per-Project)
 ```
 "Before I change [file], what should I know?"
 → Claude uses: check_before_modify, get_decisions, search_mistakes
 ```
 
-**Understanding History**:
+### Understanding History (Per-Project)
 ```
 "How did we get here with [feature]?"
 → Claude uses: get_file_evolution, link_commits_to_conversations, search_conversations
 ```
 
-**Avoiding Mistakes**:
+### Avoiding Mistakes (Per-Project)
 ```
 "Have we seen [error] before?"
 → Claude uses: search_mistakes, search_conversations, get_file_evolution
 ```
 
-**Starting New Work**:
+### Starting New Work (Per-Project)
 ```
 "I want to implement [feature], what do I need to know?"
 → Claude uses: find_similar_sessions, get_requirements, get_decisions
 ```
 
+### Global Learning (Multi-Project) 🌐 NEW
+```
+"Have I ever implemented [feature] in ANY project?"
+→ Claude uses: search_all_conversations, get_all_decisions, search_all_mistakes
+```
+
+### Cross-Platform Knowledge Transfer (Multi-Project) 🌐 NEW
+```
+"Show me how I've solved [problem] across all my work"
+→ Claude uses: search_all_conversations (searches both Claude Code and Codex)
+```
+
+### Global Setup (First-Time) 🌐 NEW
+```
+"Index all my projects"
+→ Claude uses: index_all_projects (creates global registry)
+```
+
+### Periodic Maintenance (Multi-Project) 🌐 NEW
+```
+"Update my global index with recent work"
+→ Claude uses: index_all_projects (refreshes registry)
+```
+
 ---
 
-**Pro Tip**: Just talk naturally to Claude! The MCP tools work automatically in the background to provide context-aware assistance using your conversation history.
+## When to Use Which Scope
+
+### Use Per-Project Tools When:
+- ✅ Working within a single project
+- ✅ Need fast, focused results
+- ✅ File-specific context (check_before_modify, get_file_evolution)
+- ✅ Project-specific requirements and decisions
+
+### Use Global Tools When:
+- 🌐 Starting a new feature you might have built before
+- 🌐 Learning from past work across multiple projects
+- 🌐 Discovering patterns and best practices
+- 🌐 Avoiding mistakes you made elsewhere
+- 🌐 Making architectural decisions informed by past choices
+- 🌐 Transferring knowledge from Claude Code to Codex (or vice versa)
+
+---
+
+## Performance Tips
+
+### Per-Project Search
+- ⚡ **Fast** - Single database query
+- ⚡ **Low latency** - Milliseconds
+- ⚡ **Use for**: Real-time assistance during coding
+
+### Global Search
+- 🐢 **Moderate** - Queries multiple databases
+- 🐢 **Higher latency** - Seconds (depends on number of projects)
+- 🐢 **Use for**: Research, learning, decision-making
+
+### Optimization Tips
+- Index only what you need (set `include_claude_code` / `include_codex` appropriately)
+- Use date filters to narrow scope (`date_range` parameter)
+- Limit results (`limit` parameter) - don't fetch more than you need
+- Run `index_all_projects` during downtime (not mid-coding session)
+
+---
+
+## Architecture Understanding
+
+### Hybrid Database Design
+
+```
+Per-Project Databases:
+~/.claude/projects/my-project/.db              ← Claude Code project
+~/.claude/projects/another-project/.db         ← Another Claude Code project
+~/.codex/.codex-conversations-memory.db        ← All Codex sessions
+
+Global Registry:
+~/.claude/.claude-global-index.db              ← Links to all project databases
+```
+
+### Data Flow
+
+**Per-Project Search** (`search_conversations`):
+```
+User Query
+    ↓
+Current Project DB
+    ↓
+Results (single source)
+```
+
+**Global Search** (`search_all_conversations`):
+```
+User Query
+    ↓
+Global Registry (gets list of all projects)
+    ↓
+Open each project DB (read-only)
+    ↓
+Query each DB in parallel
+    ↓
+Merge results from all projects
+    ↓
+Enriched results (multiple sources with metadata)
+```
+
+---
+
+**Pro Tip**: Just talk naturally to Claude! The MCP tools work automatically in the background to provide context-aware assistance using your conversation history - from your current project, or from ALL your projects across both Claude Code and Codex.
+
+---
+
+**Questions?** Check the [README](../README.md) for installation and setup, or the [QUICK-REFERENCE](./QUICK-REFERENCE.md) for a concise tool list.

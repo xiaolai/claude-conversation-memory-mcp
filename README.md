@@ -1,39 +1,113 @@
 # Claude Conversation Memory
 
-A Model Context Protocol (MCP) server that gives Claude Code long-term memory by indexing your conversation history with semantic search, decision tracking, and mistake prevention.
+A Model Context Protocol (MCP) server that gives AI assistants long-term memory by indexing conversation history from **Claude Code CLI** and **Codex** with semantic search, decision tracking, mistake prevention, and **global cross-project search**.
 
 ## 💡 What It Does
 
+### Core Memory Features
 - **Remembers past conversations** - Search your chat history with natural language
 - **Tracks decisions** - Never forget why you made technical choices
 - **Prevents mistakes** - Learn from past errors and avoid repeating them
 - **Links to git commits** - Connect conversations to code changes
 - **Analyzes file history** - See the complete evolution of files with context
-- **Migrates conversation history** - Keep your history when renaming or moving projects
 - **Context transfer** - Recall past work and apply it to current tasks ("remember X, now do Y based on that")
+
+### Global Cross-Project Search ✨ NEW
+- **Search across ALL projects** - Find conversations across your entire work history
+- **Dual-source support** - Index from both Claude Code CLI AND Codex
+- **Unified interface** - Search conversations from any source in one query
+- **Project filtering** - Filter by source type (claude-code, codex, or all)
+- **Hybrid architecture** - Per-project databases + global registry for fast, isolated access
+
+### Project Management
+- **Migrates conversation history** - Keep your history when renaming or moving projects
 - **Forget selectively** - Delete conversations by topic/keyword with automatic backups
+- **Cross-project insights** - Discover decisions and mistakes across all your work
 
-## ⚠️ Important: Claude Code CLI Only
+## 🎯 Dual Source Support
 
-**This MCP server works ONLY with [Claude Code CLI](https://github.com/anthropics/claude-code).**
+This MCP server works with **TWO** AI coding assistant platforms:
 
-It does NOT work with:
-- ❌ Claude Desktop
-- ❌ Claude Web
-- ❌ Other Claude integrations
+### ✅ Claude Code CLI
+- **Official support**: Primary platform
+- **Storage location**: `~/.claude/projects/`
+- **Per-project databases**: Each project gets its own isolated database
+- **Website**: https://github.com/anthropics/claude-code
 
-Claude Code CLI is required because it stores conversation history in `~/.claude/projects/` which this MCP indexes.
+### ✅ Codex
+- **Full integration**: NEW in v1.5.0
+- **Storage location**: `~/.codex/sessions/`
+- **Date-hierarchical**: Sessions organized by `YYYY/MM/DD/`
+- **Dedicated database**: Separate database at `~/.codex/.codex-conversations-memory.db`
+
+### ❌ Not Supported
+- Claude Desktop (different conversation format)
+- Claude Web (no local storage)
+- Other Claude integrations
+
+## 🌐 Global Cross-Project Search
+
+The hybrid architecture enables powerful cross-project search capabilities:
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Global Architecture                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ~/.claude/.claude-global-index.db (Central Registry)        │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Tracks all indexed projects:                         │    │
+│  │ • Project paths and source types                     │    │
+│  │ • Database locations                                 │    │
+│  │ • Aggregate statistics                               │    │
+│  │ • Last indexed timestamps                            │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                    │
+│            ┌─────────────┼─────────────┐                     │
+│            ▼             ▼             ▼                     │
+│   ┌────────────┐ ┌────────────┐ ┌────────────┐             │
+│   │ Project A  │ │ Project B  │ │   Codex    │             │
+│   │ Database   │ │ Database   │ │  Database  │             │
+│   │            │ │            │ │            │             │
+│   │ • Convos   │ │ • Convos   │ │ • Sessions │             │
+│   │ • Messages │ │ • Messages │ │ • Messages │             │
+│   │ • Decisions│ │ • Decisions│ │ • Tools    │             │
+│   │ • Mistakes │ │ • Mistakes │ │ • Commits  │             │
+│   └────────────┘ └────────────┘ └────────────┘             │
+│                                                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Benefits
+
+**Isolation**: Each project has its own database - no cross-contamination
+**Speed**: Direct database access - no central bottleneck
+**Privacy**: Projects stay separate until you explicitly search globally
+**Scalability**: Add unlimited projects without performance degradation
+
+### Global Search Tools
+
+Four new MCP tools enable cross-project search:
+
+1. **`index_all_projects`** - Index all Claude Code projects + Codex in one command
+2. **`search_all_conversations`** - Search messages across all indexed projects
+3. **`get_all_decisions`** - Find decisions from any project (coming soon)
+4. **`search_all_mistakes`** - Learn from mistakes across all work (coming soon)
 
 ## 📦 Installation
 
 ### Prerequisites
 
 **Required:**
-1. **Claude Code CLI**: https://github.com/anthropics/claude-code
-2. **Node.js**: Version 18 or higher
-3. **sqlite-vec extension**: Automatically loaded (bundled with the package)
+1. **Node.js**: Version 18 or higher
+2. **Claude Code CLI** OR **Codex**: At least one AI assistant platform
+   - Claude Code: https://github.com/anthropics/claude-code
+   - Codex: Your Codex installation
+3. **sqlite-vec extension**: Automatically loaded (bundled with package)
 
-**Recommended for better semantic search quality:**
+**Recommended for better semantic search:**
 4. **Ollama**: For high-quality local embeddings
    ```bash
    # macOS/Linux
@@ -177,11 +251,17 @@ claude-conversation-memory-mcp --server
 # View database status
 claude-conversation-memory-mcp status
 
-# Index conversations
+# Index conversations (current project)
 claude-conversation-memory-mcp index --include-mcp
+
+# Index ALL projects + Codex (NEW)
+claude-conversation-memory-mcp index-all --codex --claude-code
 
 # Search for topics
 claude-conversation-memory-mcp "search database migration" --limit 3
+
+# Search across ALL projects (NEW)
+claude-conversation-memory-mcp "search-all authentication" --limit 10
 
 # Find past mistakes
 claude-conversation-memory-mcp mistakes "async" --type logic_error
@@ -223,8 +303,8 @@ claude-conversation-memory-mcp get provider
 
 ### Available Commands
 
-- **📥 Indexing**: `index`, `reindex`
-- **🔍 Search**: `search`, `decisions`, `mistakes`, `similar`
+- **📥 Indexing**: `index`, `reindex`, `index-all` (NEW)
+- **🔍 Search**: `search`, `search-all` (NEW), `decisions`, `mistakes`, `similar`
 - **📋 Files**: `check`, `history`
 - **🔗 Git**: `commits`
 - **📝 Other**: `requirements`, `tools`, `docs`
@@ -236,7 +316,7 @@ claude-conversation-memory-mcp get provider
 
 ## 🎯 Usage Examples
 
-### First Time Setup
+### First Time Setup - Single Project
 
 ```
 You: "Index my conversation history for this project"
@@ -246,12 +326,37 @@ Claude: I'll index all conversations for this project...
 ✓ Semantic search enabled (embeddings generated)
 ```
 
-### Search Past Conversations
+### First Time Setup - All Projects + Codex ✨ NEW
+
+```
+You: "Index all my projects including Codex conversations"
+
+Claude: I'll index all projects from both Claude Code and Codex...
+✓ Indexed 3 Claude Code projects (47 conversations)
+✓ Indexed Codex sessions (128 conversations)
+✓ Global index created at ~/.claude/.claude-global-index.db
+✓ Total: 175 conversations across 4 projects
+```
+
+### Search Across All Projects ✨ NEW
+
+```
+You: "Search all my conversations about authentication"
+
+Claude: Searching across 4 indexed projects...
+Found 12 results:
+• Project: my-api (claude-code) - 5 conversations
+• Project: mobile-app (claude-code) - 3 conversations
+• Project: Codex (codex) - 4 conversations
+[Returns relevant messages with project context]
+```
+
+### Search Within Current Project
 
 ```
 You: "What did we discuss about the authentication system?"
 
-Claude: Let me search our conversation history...
+Claude: Let me search our conversation history for this project...
 [Returns relevant messages with context and timestamps]
 ```
 
@@ -282,13 +387,17 @@ Claude: Let me search past mistakes...
 [Shows previous errors and how they were fixed]
 ```
 
-### Find Related Work
+### Find Related Work Across Projects ✨ NEW
 
 ```
-You: "Have we worked on similar API endpoints before?"
+You: "Search all projects for similar API endpoint implementations"
 
-Claude: Let me find similar sessions...
-[Returns past conversations about similar work]
+Claude: Searching across all indexed projects...
+Found similar work in:
+• Project A: REST API design patterns
+• Project B: GraphQL endpoint structure
+• Codex: API versioning approach
+[Returns relevant sessions from multiple projects]
 ```
 
 ### View File History
@@ -314,8 +423,39 @@ Claude: Let me recall the authentication implementation context...
 - "Remember the bug we fixed in parser.ts, check if similar issue exists in lexer.ts"
 - "Recall all decisions about database schema, now design the migration strategy"
 - "Find mistakes we made with async/await, avoid them in this new async function"
+- "Search all my projects for how I handled error boundaries" ✨ NEW
 
 ## 🔧 Advanced Usage
+
+### Global Indexing Options ✨ NEW
+
+#### Index All Projects
+
+```
+You: "Index all my projects from Claude Code and Codex"
+
+# With options:
+You: "Index all projects, include Codex at /custom/path/.codex, exclude MCP conversations"
+```
+
+Options:
+- `include_codex` (default: true) - Index Codex sessions
+- `include_claude_code` (default: true) - Index Claude Code projects
+- `codex_path` - Custom Codex location (default: `~/.codex`)
+- `claude_projects_path` - Custom Claude Code projects location (default: `~/.claude/projects`)
+
+#### Filter Global Search by Source
+
+```
+You: "Search only Claude Code projects for authentication"
+# source_type: "claude-code"
+
+You: "Search only Codex sessions for database design"
+# source_type: "codex"
+
+You: "Search all sources for error handling"
+# source_type: "all" (default)
+```
 
 ### Index Specific Session
 
@@ -403,14 +543,26 @@ After indexing, you'll see:
 💾 Database: /path/to/.claude-conversations-memory.db
 ```
 
+For global indexing:
+
+```
+🌐 Global index: ~/.claude/.claude-global-index.db
+📁 Indexed 4 projects:
+  • 2 Claude Code projects
+  • 1 Codex project
+💾 Total: 175 conversations, 8,432 messages
+```
+
 This shows:
 - **Indexed folders**: Which conversation folders were used (including legacy if it exists)
-- **Database location**: Where your indexed data is stored
+- **Database locations**: Where your indexed data is stored (per-project + global)
+- **Statistics**: Total counts across all sources
 
 ### Search with Date Filters
 
 ```
 You: "What were we working on last week?"
+You: "Search all projects for discussions from January 2025"
 ```
 
 ### Generate Documentation
@@ -484,7 +636,7 @@ This shows what would be migrated without actually copying files.
 
 ### Merge Conversations from Different Projects
 
-**NEW in v0.4.0**: Combine conversation history from different projects into one folder using merge mode.
+Combine conversation history from different projects into one folder using merge mode.
 
 **Use case**: You want to merge conversations from `/project-a/drafts/2025-01-05` into your current project `/project-b`.
 
@@ -593,18 +745,61 @@ Claude will use `forget_by_topic` with `confirm=true`:
 - "bug in parser" - Specific issues
 - "refactoring", "cleanup" - Development phases
 
+## 🏗️ Architecture
+
+### Hybrid Database Design
+
+The MCP uses a **hybrid architecture** combining per-project isolation with global search capability:
+
+```
+Per-Project Databases (Isolation & Speed)
+├── ~/.claude/projects/{project}/.claude-conversations-memory.db
+├── ~/.claude/projects/{another-project}/.claude-conversations-memory.db
+└── ~/.codex/.codex-conversations-memory.db
+
+Global Registry (Cross-Project Search)
+└── ~/.claude/.claude-global-index.db
+    ├── Tracks all indexed projects
+    ├── Stores project metadata
+    └── Enables global search coordination
+```
+
+**Benefits:**
+- **Privacy**: Projects remain isolated unless you explicitly search globally
+- **Performance**: Direct database access per project - no central bottleneck
+- **Scalability**: Add unlimited projects without performance degradation
+- **Flexibility**: Search single project OR all projects as needed
+
+### Database Schema
+
+Each project database contains:
+- **conversations**: Session metadata with source_type ('claude-code' or 'codex')
+- **messages**: Chat messages with semantic embeddings
+- **decisions**: Extracted architectural decisions
+- **mistakes**: Tracked errors and corrections
+- **git_commits**: Linked git history
+- **file_edits**: File modification tracking
+- **thinking_blocks**: Claude's reasoning (optional)
+
+The global index contains:
+- **project_metadata**: Registry of all indexed projects
+- **source_type**: Distinguishes claude-code vs codex
+- **aggregate stats**: Total conversations, messages, decisions, mistakes
+
 ## 📚 Learn More
 
-- **[Tool Examples](docs/TOOL-EXAMPLES.md)** - 50+ natural language examples for each tool
+- **[Tool Examples](docs/TOOL-EXAMPLES.md)** - 50+ natural language examples for each tool (including new global search tools)
 - **[Quick Reference](docs/QUICK-REFERENCE.md)** - Common phrases cheat sheet
 - **[Embeddings FAQ](docs/EMBEDDINGS-FAQ.md)** - How semantic search works
-
+- **[Functional Matrix](docs/FUNCTIONAL-MATRIX.md)** - Complete feature coverage
 
 ## 🐛 Troubleshooting
 
 ### "No conversations found"
 
 Make sure you're running this in a directory where you've had Claude Code CLI conversations. Check `~/.claude/projects/` to verify conversation files exist.
+
+For Codex: Check `~/.codex/sessions/` for session files.
 
 ### "Embeddings failed"
 
@@ -613,6 +808,10 @@ The MCP falls back to full-text search if embeddings fail. Everything still work
 ### "MCP not responding"
 
 Restart Claude Code CLI to reload the MCP server.
+
+### "Global index not found"
+
+Run `index_all_projects` first to create the global registry before using cross-project search.
 
 ## 📄 License
 
@@ -624,4 +823,4 @@ Inspired by [code-graph-rag-mcp](https://github.com/er77/code-graph-rag-mcp).
 
 ---
 
-**Made with ❤️ for the Claude Code CLI community**
+**Made with ❤️ for the Claude Code CLI and Codex communities**
