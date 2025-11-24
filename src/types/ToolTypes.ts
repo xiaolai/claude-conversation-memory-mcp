@@ -17,13 +17,19 @@ export interface IndexConversationsArgs {
 export interface SearchConversationsArgs {
   query: string;
   limit?: number;
+  offset?: number;
   date_range?: [number, number];
+  scope?: 'current' | 'all' | 'global';
+  conversation_id?: string; // For scope='current'
 }
 
 export interface GetDecisionsArgs {
   query: string;
   file_path?: string;
   limit?: number;
+  offset?: number;
+  scope?: 'current' | 'all' | 'global';
+  conversation_id?: string; // For scope='current'
 }
 
 export interface CheckBeforeModifyArgs {
@@ -40,12 +46,17 @@ export interface LinkCommitsToConversationsArgs {
   query?: string;
   conversation_id?: string;
   limit?: number;
+  offset?: number;
+  scope?: 'current' | 'all' | 'global';
 }
 
 export interface SearchMistakesArgs {
   query: string;
   mistake_type?: string;
   limit?: number;
+  offset?: number;
+  scope?: 'current' | 'all' | 'global';
+  conversation_id?: string; // For scope='current'
 }
 
 export interface GetRequirementsArgs {
@@ -68,6 +79,9 @@ export interface GetToolHistoryArgs {
 export interface FindSimilarSessionsArgs {
   query: string;
   limit?: number;
+  offset?: number;
+  scope?: 'current' | 'all' | 'global';
+  conversation_id?: string; // For scope='current'
 }
 
 export interface GenerateDocumentationArgs {
@@ -111,6 +125,9 @@ export interface SearchConversationsResponse {
   query: string;
   results: SearchResult[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
+  scope: 'current' | 'all' | 'global';
 }
 
 export interface DecisionResult {
@@ -131,6 +148,9 @@ export interface GetDecisionsResponse {
   file_path?: string;
   decisions: DecisionResult[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
+  scope: 'current' | 'all' | 'global';
 }
 
 export interface EditInfo {
@@ -195,6 +215,9 @@ export interface LinkCommitsToConversationsResponse {
   conversation_id?: string;
   commits: CommitResult[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
+  scope: 'current' | 'all' | 'global';
 }
 
 export interface MistakeResult {
@@ -212,6 +235,9 @@ export interface SearchMistakesResponse {
   mistake_type?: string;
   mistakes: MistakeResult[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
+  scope: 'current' | 'all' | 'global';
 }
 
 export interface RequirementResult {
@@ -276,6 +302,9 @@ export interface FindSimilarSessionsResponse {
   query: string;
   sessions: SessionResult[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
+  scope: 'current' | 'all' | 'global';
 }
 
 export interface RecallAndApplyArgs {
@@ -284,6 +313,9 @@ export interface RecallAndApplyArgs {
   file_path?: string;
   date_range?: [number, number];
   limit?: number;
+  offset?: number;
+  scope?: 'current' | 'all' | 'global';
+  conversation_id?: string; // For scope='current'
 }
 
 export interface RecalledContext {
@@ -547,6 +579,7 @@ export interface IndexAllProjectsResponse {
 export interface SearchAllConversationsArgs {
   query: string;
   limit?: number;
+  offset?: number;
   date_range?: [number, number];
   source_type?: 'claude-code' | 'codex' | 'all';
 }
@@ -560,6 +593,8 @@ export interface SearchAllConversationsResponse {
   query: string;
   results: GlobalSearchResult[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
   projects_searched: number;
   search_stats: {
     claude_code_results: number;
@@ -572,6 +607,7 @@ export interface GetAllDecisionsArgs {
   query: string;
   file_path?: string;
   limit?: number;
+  offset?: number;
   source_type?: 'claude-code' | 'codex' | 'all';
 }
 
@@ -584,6 +620,8 @@ export interface GetAllDecisionsResponse {
   query: string;
   decisions: GlobalDecision[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
   projects_searched: number;
   message: string;
 }
@@ -592,6 +630,7 @@ export interface SearchAllMistakesArgs {
   query: string;
   mistake_type?: string;
   limit?: number;
+  offset?: number;
   source_type?: 'claude-code' | 'codex' | 'all';
 }
 
@@ -604,6 +643,8 @@ export interface SearchAllMistakesResponse {
   query: string;
   mistakes: GlobalMistake[];
   total_found: number;
+  has_more: boolean;
+  offset: number;
   projects_searched: number;
   message: string;
 }

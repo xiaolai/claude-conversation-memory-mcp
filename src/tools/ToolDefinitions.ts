@@ -43,7 +43,7 @@ export const TOOLS = {
 
   search_conversations: {
     name: "search_conversations",
-    description: "Search conversation history using natural language queries. Returns relevant messages with context.",
+    description: "Search conversation history using natural language queries. Returns relevant messages with context. Supports pagination and scope filtering (current session, all sessions in project, or global across projects).",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,10 +56,25 @@ export const TOOLS = {
           description: "Maximum number of results (default: 10)",
           default: 10,
         },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
         date_range: {
           type: "array",
           description: "Optional date range filter [start_timestamp, end_timestamp]",
           items: { type: "number" },
+        },
+        scope: {
+          type: "string",
+          enum: ["current", "all", "global"],
+          description: "Search scope: 'current' (current session only), 'all' (all sessions in current project), 'global' (all indexed projects including Codex). Default: 'all'",
+          default: "all",
+        },
+        conversation_id: {
+          type: "string",
+          description: "Required when scope='current': the conversation/session ID to search within",
         },
       },
       required: ["query"],
@@ -68,7 +83,7 @@ export const TOOLS = {
 
   get_decisions: {
     name: "get_decisions",
-    description: "Find decisions made about a specific topic, file, or component. Shows rationale, alternatives considered, and rejected approaches.",
+    description: "Find decisions made about a specific topic, file, or component. Shows rationale, alternatives considered, and rejected approaches. Supports pagination and scope filtering.",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,6 +99,21 @@ export const TOOLS = {
           type: "number",
           description: "Maximum number of decisions to return (default: 10)",
           default: 10,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        scope: {
+          type: "string",
+          enum: ["current", "all", "global"],
+          description: "Search scope: 'current' (current session only), 'all' (all sessions in current project), 'global' (all indexed projects including Codex). Default: 'all'",
+          default: "all",
+        },
+        conversation_id: {
+          type: "string",
+          description: "Required when scope='current': the conversation/session ID to search within",
         },
       },
       required: ["query"],
@@ -132,7 +162,7 @@ export const TOOLS = {
 
   link_commits_to_conversations: {
     name: "link_commits_to_conversations",
-    description: "Link git commits to the conversation sessions where they were made or discussed. Creates associations between code changes and their conversation context, enabling you to see WHY changes were made.",
+    description: "Link git commits to the conversation sessions where they were made or discussed. Creates associations between code changes and their conversation context, enabling you to see WHY changes were made. Supports pagination and scope filtering.",
     inputSchema: {
       type: "object",
       properties: {
@@ -149,13 +179,24 @@ export const TOOLS = {
           description: "Maximum number of commits (default: 20)",
           default: 20,
         },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        scope: {
+          type: "string",
+          enum: ["current", "all", "global"],
+          description: "Search scope: 'current' (current session only), 'all' (all sessions in current project), 'global' (all indexed projects including Codex). Default: 'all'",
+          default: "all",
+        },
       },
     },
   },
 
   search_mistakes: {
     name: "search_mistakes",
-    description: "Find past mistakes to avoid repeating them. Shows what went wrong and how it was corrected.",
+    description: "Find past mistakes to avoid repeating them. Shows what went wrong and how it was corrected. Supports pagination and scope filtering.",
     inputSchema: {
       type: "object",
       properties: {
@@ -172,6 +213,21 @@ export const TOOLS = {
           type: "number",
           description: "Maximum number of results (default: 10)",
           default: 10,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        scope: {
+          type: "string",
+          enum: ["current", "all", "global"],
+          description: "Search scope: 'current' (current session only), 'all' (all sessions in current project), 'global' (all indexed projects including Codex). Default: 'all'",
+          default: "all",
+        },
+        conversation_id: {
+          type: "string",
+          description: "Required when scope='current': the conversation/session ID to search within",
         },
       },
       required: ["query"],
@@ -256,7 +312,7 @@ export const TOOLS = {
 
   find_similar_sessions: {
     name: "find_similar_sessions",
-    description: "Find conversations that dealt with similar topics or problems.",
+    description: "Find conversations that dealt with similar topics or problems. Supports pagination and scope filtering.",
     inputSchema: {
       type: "object",
       properties: {
@@ -269,6 +325,21 @@ export const TOOLS = {
           description: "Maximum number of sessions (default: 5)",
           default: 5,
         },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        scope: {
+          type: "string",
+          enum: ["current", "all", "global"],
+          description: "Search scope: 'current' (current session only), 'all' (all sessions in current project), 'global' (all indexed projects including Codex). Default: 'all'",
+          default: "all",
+        },
+        conversation_id: {
+          type: "string",
+          description: "Required when scope='current': the conversation/session ID to search within",
+        },
       },
       required: ["query"],
     },
@@ -276,7 +347,7 @@ export const TOOLS = {
 
   recall_and_apply: {
     name: "recall_and_apply",
-    description: "Recall relevant past context (conversations, decisions, mistakes, file changes) and format it for applying to current work. Use this when you need to 'remember when we did X' and 'now do Y based on that'. Returns structured context optimized for context transfer workflows.",
+    description: "Recall relevant past context (conversations, decisions, mistakes, file changes) and format it for applying to current work. Use this when you need to 'remember when we did X' and 'now do Y based on that'. Returns structured context optimized for context transfer workflows. Supports pagination and scope filtering.",
     inputSchema: {
       type: "object",
       properties: {
@@ -306,6 +377,21 @@ export const TOOLS = {
           type: "number",
           description: "Maximum results per context type (default: 5)",
           default: 5,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        scope: {
+          type: "string",
+          enum: ["current", "all", "global"],
+          description: "Search scope: 'current' (current session only), 'all' (all sessions in current project), 'global' (all indexed projects including Codex). Default: 'all'",
+          default: "all",
+        },
+        conversation_id: {
+          type: "string",
+          description: "Required when scope='current': the conversation/session ID to search within",
         },
       },
       required: ["query"],
@@ -445,7 +531,7 @@ export const TOOLS = {
 
   search_all_conversations: {
     name: "search_all_conversations",
-    description: "Search conversations across all indexed projects (Claude Code + Codex). Returns results from all projects with source type and project path for context.",
+    description: "Search conversations across all indexed projects (Claude Code + Codex). Returns results from all projects with source type and project path for context. Supports full pagination.",
     inputSchema: {
       type: "object",
       properties: {
@@ -457,6 +543,11 @@ export const TOOLS = {
           type: "number",
           description: "Maximum number of results (default: 20)",
           default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
         },
         date_range: {
           type: "array",
@@ -476,7 +567,7 @@ export const TOOLS = {
 
   get_all_decisions: {
     name: "get_all_decisions",
-    description: "Find decisions made across all indexed projects. Shows rationale, alternatives, and rejected approaches from all your work globally.",
+    description: "Find decisions made across all indexed projects. Shows rationale, alternatives, and rejected approaches from all your work globally. Supports full pagination.",
     inputSchema: {
       type: "object",
       properties: {
@@ -493,6 +584,11 @@ export const TOOLS = {
           description: "Maximum number of decisions to return (default: 20)",
           default: 20,
         },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
         source_type: {
           type: "string",
           description: "Filter by source: 'claude-code', 'codex', or 'all' (default: 'all')",
@@ -506,7 +602,7 @@ export const TOOLS = {
 
   search_all_mistakes: {
     name: "search_all_mistakes",
-    description: "Find past mistakes across all indexed projects to avoid repeating them. Shows what went wrong and how it was corrected across all your work.",
+    description: "Find past mistakes across all indexed projects to avoid repeating them. Shows what went wrong and how it was corrected across all your work. Supports full pagination.",
     inputSchema: {
       type: "object",
       properties: {
@@ -522,6 +618,11 @@ export const TOOLS = {
           type: "number",
           description: "Maximum number of results (default: 20)",
           default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
         },
         source_type: {
           type: "string",

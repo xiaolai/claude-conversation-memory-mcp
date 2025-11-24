@@ -177,18 +177,116 @@ export class ToolHandlers {
    */
   async searchConversations(args: Record<string, unknown>): Promise<Types.SearchConversationsResponse> {
     const typedArgs = args as unknown as Types.SearchConversationsArgs;
-    const { query, limit = 10, date_range } = typedArgs;
+    const { query, limit = 10, offset = 0, date_range, scope = 'all', conversation_id } = typedArgs;
 
-    const filter: Record<string, unknown> = {};
-    if (date_range) {
-      filter.date_range = date_range;
+    // Handle global scope by delegating to searchAllConversations
+    if (scope === 'global') {
+      const { GlobalIndex } = await import("../storage/GlobalIndex.js");
+      const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+      const { SemanticSearch } = await import("../search/SemanticSearch.js");
+
+      const globalIndex = new GlobalIndex();
+      const projects = globalIndex.getAllProjects();
+      const allResults: Types.SearchResult[] = [];
+
+      for (const project of projects) {
+        let projectDb: SQLiteManager | null = null;
+        try {
+          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
+          const semanticSearch = new SemanticSearch(projectDb);
+          const localResults = await semanticSearch.searchConversations(query, limit + offset);
+
+          const filteredResults = date_range
+            ? localResults.filter((r: { message: { timestamp: number } }) => {
+                const timestamp = r.message.timestamp;
+                return timestamp >= date_range[0] && timestamp <= date_range[1];
+              })
+            : localResults;
+
+          for (const result of filteredResults) {
+            allResults.push({
+              conversation_id: result.conversation.id,
+              message_id: result.message.id,
+              timestamp: new Date(result.message.timestamp).toISOString(),
+              similarity: result.similarity,
+              snippet: result.snippet,
+              git_branch: result.conversation.git_branch,
+              message_type: result.message.message_type,
+              role: result.message.role,
+            });
+          }
+        } finally {
+          if (projectDb) {
+            projectDb.close();
+          }
+        }
+      }
+
+      allResults.sort((a, b) => b.similarity - a.similarity);
+      const paginatedResults = allResults.slice(offset, offset + limit);
+
+      return {
+        query,
+        results: paginatedResults,
+        total_found: paginatedResults.length,
+        has_more: offset + limit < allResults.length,
+        offset,
+        scope: 'global',
+      };
     }
 
-    const results = await this.memory.search(query, limit);
+    // Handle current session scope
+    if (scope === 'current') {
+      if (!conversation_id) {
+        throw new Error("conversation_id is required when scope='current'");
+      }
+
+      const results = await this.memory.search(query, limit + offset);
+      const filteredResults = results.filter(r => r.conversation.id === conversation_id);
+
+      const dateFilteredResults = date_range
+        ? filteredResults.filter(r => {
+            const timestamp = r.message.timestamp;
+            return timestamp >= date_range[0] && timestamp <= date_range[1];
+          })
+        : filteredResults;
+
+      const paginatedResults = dateFilteredResults.slice(offset, offset + limit);
+
+      return {
+        query,
+        results: paginatedResults.map((r) => ({
+          conversation_id: r.conversation.id,
+          message_id: r.message.id,
+          timestamp: new Date(r.message.timestamp).toISOString(),
+          similarity: r.similarity,
+          snippet: r.snippet,
+          git_branch: r.conversation.git_branch,
+          message_type: r.message.message_type,
+          role: r.message.role,
+        })),
+        total_found: paginatedResults.length,
+        has_more: offset + limit < dateFilteredResults.length,
+        offset,
+        scope: 'current',
+      };
+    }
+
+    // Handle 'all' scope (default) - all sessions in current project
+    const results = await this.memory.search(query, limit + offset);
+
+    const filteredResults = date_range
+      ? results.filter(r => {
+          const timestamp = r.message.timestamp;
+          return timestamp >= date_range[0] && timestamp <= date_range[1];
+        })
+      : results;
+
+    const paginatedResults = filteredResults.slice(offset, offset + limit);
 
     return {
       query,
-      results: results.map((r) => ({
+      results: paginatedResults.map((r) => ({
         conversation_id: r.conversation.id,
         message_id: r.message.id,
         timestamp: new Date(r.message.timestamp).toISOString(),
@@ -198,7 +296,10 @@ export class ToolHandlers {
         message_type: r.message.message_type,
         role: r.message.role,
       })),
-      total_found: results.length,
+      total_found: paginatedResults.length,
+      has_more: offset + limit < filteredResults.length,
+      offset,
+      scope: 'all',
     };
   }
 
@@ -245,9 +346,34 @@ export class ToolHandlers {
    */
   async getDecisions(args: Record<string, unknown>): Promise<Types.GetDecisionsResponse> {
     const typedArgs = args as unknown as Types.GetDecisionsArgs;
-    const { query, file_path, limit = 10 } = typedArgs;
+    const { query, file_path, limit = 10, offset = 0, scope = 'all', conversation_id } = typedArgs;
 
-    const results = await this.memory.searchDecisions(query, limit);
+    // Handle global scope
+    if (scope === 'global') {
+      const globalResponse = await this.getAllDecisions({ query, file_path, limit, offset, source_type: 'all' });
+      return {
+        query,
+        file_path,
+        decisions: globalResponse.decisions.map(d => ({
+          decision_id: d.decision_id,
+          decision_text: d.decision_text,
+          rationale: d.rationale,
+          alternatives_considered: d.alternatives_considered,
+          rejected_reasons: d.rejected_reasons,
+          context: d.context,
+          related_files: d.related_files,
+          related_commits: d.related_commits,
+          timestamp: d.timestamp,
+          similarity: d.similarity,
+        })),
+        total_found: globalResponse.total_found,
+        has_more: globalResponse.has_more,
+        offset: globalResponse.offset,
+        scope: 'global',
+      };
+    }
+
+    const results = await this.memory.searchDecisions(query, limit + offset);
 
     // Filter by file if specified
     let filteredResults = results;
@@ -257,10 +383,20 @@ export class ToolHandlers {
       );
     }
 
+    // Filter by conversation_id if scope is 'current'
+    if (scope === 'current') {
+      if (!conversation_id) {
+        throw new Error("conversation_id is required when scope='current'");
+      }
+      filteredResults = filteredResults.filter((r) => r.decision.conversation_id === conversation_id);
+    }
+
+    const paginatedResults = filteredResults.slice(offset, offset + limit);
+
     return {
       query,
       file_path,
-      decisions: filteredResults.map((r) => ({
+      decisions: paginatedResults.map((r) => ({
         decision_id: r.decision.id,
         decision_text: r.decision.decision_text,
         rationale: r.decision.rationale,
@@ -272,7 +408,10 @@ export class ToolHandlers {
         timestamp: new Date(r.decision.timestamp).toISOString(),
         similarity: r.similarity,
       })),
-      total_found: filteredResults.length,
+      total_found: paginatedResults.length,
+      has_more: offset + limit < filteredResults.length,
+      offset,
+      scope,
     };
   }
 
@@ -476,14 +615,23 @@ export class ToolHandlers {
    */
   async linkCommitsToConversations(args: Record<string, unknown>): Promise<Types.LinkCommitsToConversationsResponse> {
     const typedArgs = args as Types.LinkCommitsToConversationsArgs;
-    const { query, conversation_id, limit = 20 } = typedArgs;
+    const { query, conversation_id, limit = 20, offset = 0, scope = 'all' } = typedArgs;
+
+    // Global scope not supported for git commits (project-specific)
+    if (scope === 'global') {
+      throw new Error("Global scope is not supported for linkCommitsToConversations (git commits are project-specific)");
+    }
 
     let sql = "SELECT * FROM git_commits WHERE 1=1";
     const params: (string | number)[] = [];
 
-    if (conversation_id) {
+    if (conversation_id || scope === 'current') {
+      const targetId = conversation_id || typedArgs.conversation_id;
+      if (!targetId) {
+        throw new Error("conversation_id is required when scope='current'");
+      }
       sql += " AND conversation_id = ?";
-      params.push(conversation_id);
+      params.push(targetId);
     }
 
     if (query) {
@@ -491,15 +639,18 @@ export class ToolHandlers {
       params.push(`%${query}%`);
     }
 
-    sql += " ORDER BY timestamp DESC LIMIT ?";
-    params.push(limit);
+    sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+    params.push(limit + 1); // Fetch one extra to determine has_more
+    params.push(offset);
 
     const commits = this.db.prepare(sql).all(...params) as Types.GitCommitRow[];
+    const hasMore = commits.length > limit;
+    const results = hasMore ? commits.slice(0, limit) : commits;
 
     return {
       query,
       conversation_id,
-      commits: commits.map((c) => ({
+      commits: results.map((c) => ({
         hash: c.hash.substring(0, 7),
         full_hash: c.hash,
         message: c.message,
@@ -509,7 +660,10 @@ export class ToolHandlers {
         files_changed: JSON.parse(c.files_changed || "[]"),
         conversation_id: c.conversation_id,
       })),
-      total_found: commits.length,
+      total_found: results.length,
+      has_more: hasMore,
+      offset,
+      scope,
     };
   }
 
@@ -552,7 +706,29 @@ export class ToolHandlers {
    */
   async searchMistakes(args: Record<string, unknown>): Promise<Types.SearchMistakesResponse> {
     const typedArgs = args as unknown as Types.SearchMistakesArgs;
-    const { query, mistake_type, limit = 10 } = typedArgs;
+    const { query, mistake_type, limit = 10, offset = 0, scope = 'all', conversation_id } = typedArgs;
+
+    // Handle global scope
+    if (scope === 'global') {
+      const globalResponse = await this.searchAllMistakes({ query, mistake_type, limit, offset, source_type: 'all' });
+      return {
+        query,
+        mistake_type,
+        mistakes: globalResponse.mistakes.map(m => ({
+          mistake_id: m.mistake_id,
+          mistake_type: m.mistake_type,
+          what_went_wrong: m.what_went_wrong,
+          correction: m.correction,
+          user_correction_message: m.user_correction_message,
+          files_affected: m.files_affected,
+          timestamp: m.timestamp,
+        })),
+        total_found: globalResponse.total_found,
+        has_more: globalResponse.has_more,
+        offset: globalResponse.offset,
+        scope: 'global',
+      };
+    }
 
     const sanitized = sanitizeForLike(query);
     let sql = "SELECT * FROM mistakes WHERE what_went_wrong LIKE ? ESCAPE '\\'";
@@ -563,15 +739,27 @@ export class ToolHandlers {
       params.push(mistake_type);
     }
 
-    sql += " ORDER BY timestamp DESC LIMIT ?";
-    params.push(limit);
+    // Filter by conversation_id if scope is 'current'
+    if (scope === 'current') {
+      if (!conversation_id) {
+        throw new Error("conversation_id is required when scope='current'");
+      }
+      sql += " AND conversation_id = ?";
+      params.push(conversation_id);
+    }
+
+    sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+    params.push(limit + 1); // Fetch one extra to determine has_more
+    params.push(offset);
 
     const mistakes = this.db.prepare(sql).all(...params) as Types.MistakeRow[];
+    const hasMore = mistakes.length > limit;
+    const results = hasMore ? mistakes.slice(0, limit) : mistakes;
 
     return {
       query,
       mistake_type,
-      mistakes: mistakes.map((m) => ({
+      mistakes: results.map((m) => ({
         mistake_id: m.id,
         mistake_type: m.mistake_type,
         what_went_wrong: m.what_went_wrong,
@@ -580,7 +768,10 @@ export class ToolHandlers {
         files_affected: JSON.parse(m.files_affected || "[]"),
         timestamp: new Date(m.timestamp).toISOString(),
       })),
-      total_found: mistakes.length,
+      total_found: results.length,
+      has_more: hasMore,
+      offset,
+      scope,
     };
   }
 
@@ -874,9 +1065,15 @@ export class ToolHandlers {
    */
   async findSimilarSessions(args: Record<string, unknown>): Promise<Types.FindSimilarSessionsResponse> {
     const typedArgs = args as unknown as Types.FindSimilarSessionsArgs;
-    const { query, limit = 5 } = typedArgs;
+    const { query, limit = 5, offset = 0, scope = 'all', conversation_id: _conversation_id } = typedArgs;
 
-    const results = await this.memory.search(query, limit * 3); // Get more to group by conversation
+    // Note: scope='global' and scope='current' have limited usefulness for finding similar SESSIONS
+    // but we implement them for API consistency
+    if (scope === 'current') {
+      throw new Error("scope='current' is not supported for findSimilarSessions (it finds sessions, not messages within a session)");
+    }
+
+    const results = await this.memory.search(query, (limit + offset) * 3); // Get more to group by conversation
 
     // Group by conversation
     const conversationMap = new Map<string, Types.SessionResult>();
@@ -906,14 +1103,18 @@ export class ToolHandlers {
       }
     }
 
-    const sessions = Array.from(conversationMap.values())
-      .sort((a, b) => b.relevance_score - a.relevance_score)
-      .slice(0, limit);
+    const allSessions = Array.from(conversationMap.values())
+      .sort((a, b) => b.relevance_score - a.relevance_score);
+
+    const sessions = allSessions.slice(offset, offset + limit);
 
     return {
       query,
       sessions,
       total_found: sessions.length,
+      has_more: offset + limit < allSessions.length,
+      offset,
+      scope,
     };
   }
 
@@ -958,7 +1159,7 @@ export class ToolHandlers {
    */
   async recallAndApply(args: Record<string, unknown>): Promise<Types.RecallAndApplyResponse> {
     const typedArgs = args as unknown as Types.RecallAndApplyArgs;
-    const { query, context_types = ["conversations", "decisions", "mistakes", "file_changes", "commits"], file_path, date_range, limit = 5 } = typedArgs;
+    const { query, context_types = ["conversations", "decisions", "mistakes", "file_changes", "commits"], file_path, date_range, limit = 5, offset = 0, scope = 'all', conversation_id } = typedArgs;
 
     const recalled: Types.RecalledContext = {};
     let totalItems = 0;
@@ -966,15 +1167,19 @@ export class ToolHandlers {
 
     // 1. Recall conversations if requested
     if (context_types.includes("conversations")) {
-      const searchResults = await this.memory.search(query, limit);
-      // Apply date filter if provided
-      const filteredResults = date_range
-        ? searchResults.filter(r => r.message.timestamp >= date_range[0] && r.message.timestamp <= date_range[1])
-        : searchResults;
+      // Use searchConversations with scope support
+      const convResponse = await this.searchConversations({
+        query,
+        limit,
+        offset,
+        date_range,
+        scope,
+        conversation_id,
+      });
 
-      recalled.conversations = filteredResults.map(result => ({
-        session_id: result.conversation.id || "unknown",
-        timestamp: new Date(result.message.timestamp).toISOString(),
+      recalled.conversations = convResponse.results.map(result => ({
+        session_id: result.conversation_id,
+        timestamp: result.timestamp,
         snippet: result.snippet,
         relevance_score: result.similarity,
       }));
@@ -987,40 +1192,25 @@ export class ToolHandlers {
 
     // 2. Recall decisions if requested
     if (context_types.includes("decisions")) {
-      const decisions = this.db.getDatabase()
-        .prepare(`
-          SELECT id, decision_text, rationale, alternatives_considered, rejected_reasons, context, related_files, timestamp
-          FROM decisions
-          WHERE decision_text LIKE ? ${file_path ? 'AND related_files LIKE ?' : ''}
-          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
-          ORDER BY timestamp DESC
-          LIMIT ?
-        `)
-        .all(
-          `%${sanitizeForLike(query)}%`,
-          ...(file_path ? [`%${sanitizeForLike(file_path)}%`] : []),
-          ...(date_range ? [date_range[0], date_range[1]] : []),
-          limit
-        ) as Array<{
-          id: string;
-          decision_text: string;
-          rationale: string | null;
-          alternatives_considered: string | null;
-          rejected_reasons: string | null;
-          context: string;
-          related_files: string;
-          timestamp: number;
-        }>;
+      // Use getDecisions with scope support
+      const decisionsResponse = await this.getDecisions({
+        query,
+        file_path,
+        limit,
+        offset,
+        scope,
+        conversation_id,
+      });
 
-      recalled.decisions = decisions.map(d => ({
-        decision_id: d.id,
-        type: d.context,
+      recalled.decisions = decisionsResponse.decisions.map(d => ({
+        decision_id: d.decision_id,
+        type: d.context || 'unknown',
         description: d.decision_text,
         rationale: d.rationale || undefined,
-        alternatives: d.alternatives_considered ? JSON.parse(d.alternatives_considered) : undefined,
-        rejected_approaches: d.rejected_reasons ? JSON.parse(d.rejected_reasons) : undefined,
-        affects_components: JSON.parse(d.related_files),
-        timestamp: new Date(d.timestamp).toISOString(),
+        alternatives: d.alternatives_considered,
+        rejected_approaches: Object.values(d.rejected_reasons),
+        affects_components: d.related_files,
+        timestamp: d.timestamp,
       }));
       totalItems += recalled.decisions.length;
 
@@ -1031,39 +1221,24 @@ export class ToolHandlers {
 
     // 3. Recall mistakes if requested
     if (context_types.includes("mistakes")) {
-      const mistakes = this.db.getDatabase()
-        .prepare(`
-          SELECT id, mistake_type, what_went_wrong, correction, user_correction_message, files_affected, timestamp
-          FROM mistakes
-          WHERE what_went_wrong LIKE ? ${file_path ? 'AND files_affected LIKE ?' : ''}
-          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
-          ORDER BY timestamp DESC
-          LIMIT ?
-        `)
-        .all(
-          `%${sanitizeForLike(query)}%`,
-          ...(file_path ? [`%${sanitizeForLike(file_path)}%`] : []),
-          ...(date_range ? [date_range[0], date_range[1]] : []),
-          limit
-        ) as Array<{
-          id: string;
-          mistake_type: string;
-          what_went_wrong: string;
-          correction: string | null;
-          user_correction_message: string | null;
-          files_affected: string;
-          timestamp: number;
-        }>;
+      // Use searchMistakes with scope support
+      const mistakesResponse = await this.searchMistakes({
+        query,
+        limit,
+        offset,
+        scope,
+        conversation_id,
+      });
 
-      recalled.mistakes = mistakes.map(m => ({
-        mistake_id: m.id,
+      recalled.mistakes = mistakesResponse.mistakes.map(m => ({
+        mistake_id: m.mistake_id,
         type: m.mistake_type,
         description: m.what_went_wrong,
         what_happened: m.what_went_wrong,
         how_fixed: m.correction || undefined,
         lesson_learned: m.user_correction_message || undefined,
-        files_affected: JSON.parse(m.files_affected),
-        timestamp: new Date(m.timestamp).toISOString(),
+        files_affected: m.files_affected,
+        timestamp: m.timestamp,
       }));
       totalItems += recalled.mistakes.length;
 
@@ -1810,7 +1985,7 @@ export class ToolHandlers {
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const typedArgs = args as unknown as Types.SearchAllConversationsArgs;
-    const { query, limit = 20, date_range, source_type = "all" } = typedArgs;
+    const { query, limit = 20, offset = 0, date_range, source_type = "all" } = typedArgs;
 
     const globalIndex = new GlobalIndex();
 
@@ -1873,19 +2048,22 @@ export class ToolHandlers {
         }
       }
 
-      // Sort by similarity and limit
-      const sortedResults = allResults.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+      // Sort by similarity and paginate
+      const sortedResults = allResults.sort((a, b) => b.similarity - a.similarity);
+      const paginatedResults = sortedResults.slice(offset, offset + limit);
 
       return {
         query,
-        results: sortedResults,
-        total_found: sortedResults.length,
+        results: paginatedResults,
+        total_found: paginatedResults.length,
+        has_more: offset + limit < sortedResults.length,
+        offset,
         projects_searched: projects.length,
         search_stats: {
           claude_code_results: claudeCodeResults,
           codex_results: codexResults,
         },
-        message: `Found ${sortedResults.length} result(s) across ${projects.length} project(s)`,
+        message: `Found ${paginatedResults.length} result(s) across ${projects.length} project(s)`,
       };
     } finally {
       // Ensure GlobalIndex is always closed
@@ -1901,22 +2079,77 @@ export class ToolHandlers {
    */
   async getAllDecisions(args: Record<string, unknown>): Promise<Types.GetAllDecisionsResponse> {
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
+    const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const typedArgs = args as unknown as Types.GetAllDecisionsArgs;
-    const { query, file_path: _file_path } = typedArgs;
+    const { query, file_path, limit = 20, offset = 0, source_type = 'all' } = typedArgs;
 
     const globalIndex = new GlobalIndex();
 
     try {
-      const projects = globalIndex.getAllProjects();
+      const projects = globalIndex.getAllProjects(
+        source_type === "all" ? undefined : source_type
+      );
 
-      // TODO: Implement cross-project decision search
-      // For now, return empty results with proper structure
+      const allDecisions: Types.GlobalDecision[] = [];
+
+      for (const project of projects) {
+        let projectDb: SQLiteManager | null = null;
+        try {
+          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
+
+          const sanitized = sanitizeForLike(query);
+          let sql = "SELECT * FROM decisions WHERE decision_text LIKE ? ESCAPE '\\\\'";
+          const params: (string | number)[] = [`%${sanitized}%`];
+
+          if (file_path) {
+            sql += " AND related_files LIKE ?";
+            params.push(`%${file_path}%`);
+          }
+
+          sql += " ORDER BY timestamp DESC LIMIT ?";
+          params.push(limit + offset + 1);
+
+          const decisions = projectDb.prepare(sql).all(...params) as Types.DecisionRow[];
+
+          for (const d of decisions) {
+            allDecisions.push({
+              decision_id: d.id,
+              decision_text: d.decision_text,
+              rationale: d.rationale,
+              alternatives_considered: JSON.parse(d.alternatives_considered || "[]"),
+              rejected_reasons: JSON.parse(d.rejected_reasons || "{}"),
+              context: d.context,
+              related_files: JSON.parse(d.related_files || "[]"),
+              related_commits: JSON.parse(d.related_commits || "[]"),
+              timestamp: new Date(d.timestamp).toISOString(),
+              similarity: 1.0, // No semantic search for now
+              project_path: project.project_path,
+              source_type: project.source_type,
+            });
+          }
+        } catch (_error) {
+          continue;
+        } finally {
+          if (projectDb) {
+            projectDb.close();
+          }
+        }
+      }
+
+      // Sort by timestamp and paginate
+      const sortedDecisions = allDecisions.sort((a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      const paginatedDecisions = sortedDecisions.slice(offset, offset + limit);
+
       return {
         query,
-        decisions: [],
-        total_found: 0,
+        decisions: paginatedDecisions,
+        total_found: paginatedDecisions.length,
+        has_more: offset + limit < sortedDecisions.length,
+        offset,
         projects_searched: projects.length,
-        message: `Cross-project decision search not yet implemented (would search ${projects.length} project(s))`,
+        message: `Found ${paginatedDecisions.length} decision(s) across ${projects.length} project(s)`,
       };
     } finally {
       globalIndex.close();
@@ -1933,22 +2166,74 @@ export class ToolHandlers {
     args: Record<string, unknown>
   ): Promise<Types.SearchAllMistakesResponse> {
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
+    const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const typedArgs = args as unknown as Types.SearchAllMistakesArgs;
-    const { query, mistake_type: _mistake_type } = typedArgs;
+    const { query, mistake_type, limit = 20, offset = 0, source_type = 'all' } = typedArgs;
 
     const globalIndex = new GlobalIndex();
 
     try {
-      const projects = globalIndex.getAllProjects();
+      const projects = globalIndex.getAllProjects(
+        source_type === "all" ? undefined : source_type
+      );
 
-      // TODO: Implement cross-project mistake search
-      // For now, return empty results with proper structure
+      const allMistakes: Types.GlobalMistake[] = [];
+
+      for (const project of projects) {
+        let projectDb: SQLiteManager | null = null;
+        try {
+          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
+
+          const sanitized = sanitizeForLike(query);
+          let sql = "SELECT * FROM mistakes WHERE what_went_wrong LIKE ? ESCAPE '\\\\'";
+          const params: (string | number)[] = [`%${sanitized}%`];
+
+          if (mistake_type) {
+            sql += " AND mistake_type = ?";
+            params.push(mistake_type);
+          }
+
+          sql += " ORDER BY timestamp DESC LIMIT ?";
+          params.push(limit + offset + 1);
+
+          const mistakes = projectDb.prepare(sql).all(...params) as Types.MistakeRow[];
+
+          for (const m of mistakes) {
+            allMistakes.push({
+              mistake_id: m.id,
+              mistake_type: m.mistake_type,
+              what_went_wrong: m.what_went_wrong,
+              correction: m.correction,
+              user_correction_message: m.user_correction_message,
+              files_affected: JSON.parse(m.files_affected || "[]"),
+              timestamp: new Date(m.timestamp).toISOString(),
+              project_path: project.project_path,
+              source_type: project.source_type,
+            });
+          }
+        } catch (_error) {
+          continue;
+        } finally {
+          if (projectDb) {
+            projectDb.close();
+          }
+        }
+      }
+
+      // Sort by timestamp and paginate
+      const sortedMistakes = allMistakes.sort((a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      const paginatedMistakes = sortedMistakes.slice(offset, offset + limit);
+
       return {
         query,
-        mistakes: [],
-        total_found: 0,
+        mistakes: paginatedMistakes,
+        total_found: paginatedMistakes.length,
+        has_more: offset + limit < sortedMistakes.length,
+        offset,
         projects_searched: projects.length,
-        message: `Cross-project mistake search not yet implemented (would search ${projects.length} project(s))`,
+        message: `Found ${paginatedMistakes.length} mistake(s) across ${projects.length} project(s)`,
       };
     } finally {
       globalIndex.close();
