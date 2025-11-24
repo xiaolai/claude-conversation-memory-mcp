@@ -35,6 +35,34 @@ import { readdirSync } from "fs";
 import { join } from "path";
 
 /**
+ * Default similarity score used when semantic search is not available.
+ * This applies to SQL-based searches where semantic embeddings are not used.
+ */
+const DEFAULT_SIMILARITY_SCORE = 1.0;
+
+/**
+ * Pagination Patterns:
+ *
+ * This codebase uses two different pagination patterns based on data source:
+ *
+ * 1. SQL-based pagination (fetch+1):
+ *    - Fetch limit+1 records from database
+ *    - hasMore = results.length > limit
+ *    - Slice to limit if hasMore is true
+ *    - Use case: Single-database SQL queries (searchMistakes, linkCommitsToConversations)
+ *    - Advantage: Efficient, minimal data transfer
+ *
+ * 2. In-memory pagination (slice):
+ *    - Fetch all needed results (or limit+offset)
+ *    - Slice to get paginated subset: results.slice(offset, offset + limit)
+ *    - has_more = offset + limit < results.length
+ *    - Use case: Semantic search, cross-project aggregation
+ *    - Advantage: Allows sorting/filtering before pagination
+ *
+ * Both patterns are correct and optimized for their respective use cases.
+ */
+
+/**
  * Tool handlers for the conversation-memory MCP server.
  *
  * Provides methods for indexing, searching, and managing conversation history.
@@ -2122,7 +2150,7 @@ export class ToolHandlers {
               related_files: JSON.parse(d.related_files || "[]"),
               related_commits: JSON.parse(d.related_commits || "[]"),
               timestamp: new Date(d.timestamp).toISOString(),
-              similarity: 1.0, // No semantic search for now
+              similarity: DEFAULT_SIMILARITY_SCORE,
               project_path: project.project_path,
               source_type: project.source_type,
             });
