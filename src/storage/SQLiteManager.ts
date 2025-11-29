@@ -179,13 +179,59 @@ export class SQLiteManager {
   private initializeSchema(): void {
     try {
       // Check if schema is already initialized
-      const tables = this.db
+      const schemaVersionExists = this.db
         .prepare(
           "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
         )
         .all();
 
-      if (tables.length === 0) {
+      if (schemaVersionExists.length === 0) {
+        // Check if this is a legacy database with incompatible schema
+        const conversationsExists = this.db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"
+          )
+          .all();
+
+        if (conversationsExists.length > 0) {
+          // Check if conversations table has expected columns
+          const columns = this.db
+            .prepare("PRAGMA table_info(conversations)")
+            .all() as Array<{ name: string }>;
+
+          const hasSourceType = columns.some(
+            (col) => col.name === "source_type"
+          );
+          const hasMessageCount = columns.some(
+            (col) => col.name === "message_count"
+          );
+
+          if (!hasSourceType || !hasMessageCount) {
+            // Legacy database with incompatible schema - drop and recreate
+            console.warn(
+              "⚠️ Legacy database detected with incompatible schema. Recreating..."
+            );
+
+            // Get all table names
+            const allTables = this.db
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+              )
+              .all() as Array<{ name: string }>;
+
+            // Drop all tables
+            for (const table of allTables) {
+              try {
+                this.db.exec(`DROP TABLE IF EXISTS "${table.name}"`);
+              } catch (_e) {
+                // Ignore errors when dropping (virtual tables may have dependencies)
+              }
+            }
+
+            console.log("Legacy tables dropped");
+          }
+        }
+
         console.log("Initializing database schema...");
 
         // Read and execute schema.sql
