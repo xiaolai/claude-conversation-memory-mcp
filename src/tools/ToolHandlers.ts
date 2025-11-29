@@ -243,6 +243,10 @@ export class ToolHandlers {
               role: result.message.role,
             });
           }
+        } catch (_error) {
+          // Skip projects that fail to search (embedding errors, etc.)
+          // Continue to next project
+          continue;
         } finally {
           if (projectDb) {
             projectDb.close();
