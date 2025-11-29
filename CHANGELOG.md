@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.5] - 2025-11-29
+
+### Fixed
+
+- **Missing Error Handling in Global Search**
+  - Added catch block to `searchConversations` with `scope='global'`
+  - Prevents embedding errors from crashing the search loop
+  - Failed projects are now skipped, allowing other projects to be searched
+
 ## [1.5.4] - 2025-11-29
 
 ### Fixed
