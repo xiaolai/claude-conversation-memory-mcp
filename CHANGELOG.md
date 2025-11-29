@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.5.2] - 2025-01-29
+## [1.5.3] - 2025-11-29
+
+### Fixed
+
+- **Critical Bug: FTS Schema Mismatch Causing Zero Search Results**
+  - Root cause: `messages_fts` FTS5 table defined a `context` column that doesn't exist in `messages` table
+  - FTS5 external content mode requires exact column matching between FTS and source table
+  - FTS rebuild command failed silently with "no such column: T.context"
+  - All FTS searches returned 0 results despite data existing in database
+  - Added schema migration v3 to fix existing databases automatically
+  - New databases now start with correct schema at version 3
+
+### Changed
+
+- Schema version bumped from 2 to 3
+- Added automatic migration that drops/recreates `messages_fts` with correct columns
+
+## [1.5.2] - 2025-11-29
 
 ### Fixed
 
