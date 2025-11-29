@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2025-11-29
+
+### Fixed
+
+- **Legacy Database Handling**
+  - Detects databases with incompatible schema (missing source_type or message_count columns)
+  - Automatically drops and recreates with current schema
+  - Fixes "no such column: source_type" error during indexing
+  - Handles databases created by older versions or different tools
+
 ## [1.5.3] - 2025-11-29
 
 ### Fixed
