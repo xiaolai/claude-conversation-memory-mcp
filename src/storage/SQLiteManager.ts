@@ -145,14 +145,27 @@ export class SQLiteManager {
    * Based on code-graph-rag-mcp sqlite-manager.ts
    */
   private optimizeDatabase(): void {
-    // WAL mode for concurrent reads during writes
-    this.db.pragma("journal_mode = WAL");
+    // Skip write-related PRAGMAs in read-only mode
+    if (!this.isReadOnly) {
+      // WAL mode for concurrent reads during writes
+      this.db.pragma("journal_mode = WAL");
 
+      // NORMAL synchronous for balance between safety and speed
+      this.db.pragma("synchronous = NORMAL");
+
+      // 4KB page size (optimal for most systems)
+      this.db.pragma(`page_size = ${PAGE_SIZE}`);
+
+      // Auto-checkpoint WAL after 1000 pages
+      this.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT}`);
+
+      // Analysis for query optimization
+      this.db.pragma("optimize");
+    }
+
+    // These PRAGMAs are safe in read-only mode
     // 64MB cache for better performance
     this.db.pragma(`cache_size = -${CACHE_SIZE_KB}`);
-
-    // NORMAL synchronous for balance between safety and speed
-    this.db.pragma("synchronous = NORMAL");
 
     // Store temp tables in memory
     this.db.pragma("temp_store = MEMORY");
@@ -160,17 +173,8 @@ export class SQLiteManager {
     // Memory-mapped I/O for faster access
     this.db.pragma(`mmap_size = ${MMAP_SIZE}`);
 
-    // 4KB page size (optimal for most systems)
-    this.db.pragma(`page_size = ${PAGE_SIZE}`);
-
-    // Auto-checkpoint WAL after 1000 pages
-    this.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT}`);
-
     // Enable foreign key constraints
     this.db.pragma("foreign_keys = ON");
-
-    // Analysis for query optimization
-    this.db.pragma("optimize");
   }
 
   /**
