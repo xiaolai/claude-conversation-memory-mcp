@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.6] - 2025-11-30
+
+### Fixed
+
+- **Vector Search Not Falling Back to FTS**
+  - Vector search returned empty results when embeddings exist but don't match query
+  - Now wraps vector search in try-catch to handle embedding errors gracefully
+  - Falls back to full-text search when vector results are empty
+  - Falls back to FTS when embedding generation fails
+  - Ensures `search_all_conversations` returns results even without embeddings
+
 ## [1.5.5] - 2025-11-29
 
 ### Fixed
