@@ -9,7 +9,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
-import { pathToProjectFolderName } from "../utils/sanitization.js";
+import { pathToProjectFolderName, escapeTableName } from "../utils/sanitization.js";
 import * as sqliteVec from "sqlite-vec";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -223,10 +223,11 @@ export class SQLiteManager {
               )
               .all() as Array<{ name: string }>;
 
-            // Drop all tables
+            // Drop all tables (escape table names to prevent SQL injection)
             for (const table of allTables) {
               try {
-                this.db.exec(`DROP TABLE IF EXISTS "${table.name}"`);
+                const safeName = escapeTableName(table.name);
+                this.db.exec(`DROP TABLE IF EXISTS "${safeName}"`);
               } catch (_e) {
                 // Ignore errors when dropping (virtual tables may have dependencies)
               }

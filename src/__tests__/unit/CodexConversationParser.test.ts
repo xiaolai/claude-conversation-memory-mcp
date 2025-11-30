@@ -49,9 +49,9 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      // Create a session file
-      const sessionId = "test-session-123";
-      const sessionFile = join(sessionDir, `rollout-1737123456-${sessionId}.jsonl`);
+      // Create a session file with UUID format matching real Codex files
+      const sessionId = "00000001-0000-0000-0000-000000000001";
+      const sessionFile = join(sessionDir, `rollout-2025-01-17T10-00-00-${sessionId}.jsonl`);
 
       const sessionMeta = {
         timestamp: "2025-01-17T10:00:00.000Z",
@@ -122,8 +122,8 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      const sessionId = "test-session-456";
-      const sessionFile = join(sessionDir, `rollout-1737123456-${sessionId}.jsonl`);
+      const sessionId = "00000002-0000-0000-0000-000000000002";
+      const sessionFile = join(sessionDir, `rollout-2025-01-17T10-00-00-${sessionId}.jsonl`);
 
       const sessionMeta = {
         timestamp: "2025-01-17T10:00:00.000Z",
@@ -193,8 +193,8 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      const sessionId = "test-session-789";
-      const sessionFile = join(sessionDir, `rollout-1737123456-${sessionId}.jsonl`);
+      const sessionId = "00000003-0000-0000-0000-000000000003";
+      const sessionFile = join(sessionDir, `rollout-2025-01-17T10-00-00-${sessionId}.jsonl`);
 
       const sessionMeta = {
         timestamp: "2025-01-17T10:00:00.000Z",
@@ -243,12 +243,12 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      // Create two session files
-      const sessionId1 = "session-1";
-      const sessionId2 = "session-2";
+      // Create two session files with UUID format
+      const sessionId1 = "00000004-0000-0000-0000-000000000001";
+      const sessionId2 = "00000004-0000-0000-0000-000000000002";
 
       for (const sessionId of [sessionId1, sessionId2]) {
-        const sessionFile = join(sessionDir, `rollout-1737123456-${sessionId}.jsonl`);
+        const sessionFile = join(sessionDir, `rollout-2025-01-17T10-00-00-${sessionId}.jsonl`);
         const sessionMeta = {
           timestamp: "2025-01-17T10:00:00.000Z",
           type: "session_meta",
@@ -272,8 +272,8 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      const sessionId = "test-session-error";
-      const sessionFile = join(sessionDir, `rollout-1737123456-${sessionId}.jsonl`);
+      const sessionId = "00000005-0000-0000-0000-000000000005";
+      const sessionFile = join(sessionDir, `rollout-2025-01-17T10-00-00-${sessionId}.jsonl`);
 
       const sessionMeta = {
         timestamp: "2025-01-17T10:00:00.000Z",
@@ -313,7 +313,7 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      const sessionFile = join(sessionDir, "rollout-1737123456-empty.jsonl");
+      const sessionFile = join(sessionDir, "rollout-2025-01-17T10-00-00-00000006-0000-0000-0000-000000000006.jsonl");
       writeFileSync(sessionFile, "");
 
       const result = parser.parseSession(testCodexPath);
@@ -326,7 +326,7 @@ describe("CodexConversationParser", () => {
       const sessionDir = join(testCodexPath, "sessions", "2025", "01", "17");
       mkdirSync(sessionDir, { recursive: true });
 
-      const sessionFile = join(sessionDir, "rollout-1737123456-no-meta.jsonl");
+      const sessionFile = join(sessionDir, "rollout-2025-01-17T10-00-00-00000007-0000-0000-0000-000000000007.jsonl");
       const messageOnly = {
         timestamp: "2025-01-17T10:00:01.000Z",
         type: "response_item",

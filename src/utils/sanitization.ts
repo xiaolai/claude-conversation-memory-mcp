@@ -89,6 +89,45 @@ export function sanitizeSQLIdentifier(identifier: string): string {
 }
 
 /**
+ * Escape a table name for use in double-quoted SQL identifiers
+ * Doubles any embedded double-quotes per SQL standard
+ */
+export function escapeTableName(tableName: string): string {
+  if (!tableName || tableName.length === 0) {
+    throw new Error("Table name cannot be empty");
+  }
+  // Double any embedded double-quotes (SQL standard escaping)
+  return tableName.replace(/"/g, '""');
+}
+
+/**
+ * Validate database path for use in ATTACH DATABASE statement
+ * Prevents SQL injection via path manipulation
+ */
+export function validateDatabasePath(dbPath: string): string {
+  if (!dbPath || dbPath.length === 0) {
+    throw new Error("Database path cannot be empty");
+  }
+
+  // Check for single quotes which could break SQL string
+  if (dbPath.includes("'")) {
+    throw new Error("Database path cannot contain single quotes");
+  }
+
+  // Check for null bytes
+  if (dbPath.includes("\0")) {
+    throw new Error("Database path cannot contain null bytes");
+  }
+
+  // Check for path traversal
+  if (dbPath.includes("..")) {
+    throw new Error("Path traversal detected in database path");
+  }
+
+  return dbPath;
+}
+
+/**
  * Convert a project path to Claude Code's project folder name
  * Cross-platform compatible - handles both Unix and Windows paths
  *

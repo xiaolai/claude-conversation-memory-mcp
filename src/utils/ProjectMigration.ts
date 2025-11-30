@@ -7,7 +7,7 @@ import { existsSync, readdirSync, mkdirSync, copyFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import Database from "better-sqlite3";
-import { pathToProjectFolderName } from "./sanitization.js";
+import { pathToProjectFolderName, validateDatabasePath } from "./sanitization.js";
 
 export interface OldFolder {
   folderPath: string;
@@ -389,8 +389,9 @@ export class ProjectMigration {
     try {
       target.exec("BEGIN TRANSACTION");
 
-      // Attach source database
-      target.exec(`ATTACH DATABASE '${sourceDbPath}' AS source`);
+      // Attach source database (validate path to prevent SQL injection)
+      const safeSourcePath = validateDatabasePath(sourceDbPath);
+      target.exec(`ATTACH DATABASE '${safeSourcePath}' AS source`);
 
       // Merge conversations (always exists)
       target.exec(`
