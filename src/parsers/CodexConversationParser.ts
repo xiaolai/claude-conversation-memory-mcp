@@ -129,12 +129,20 @@ export class CodexConversationParser {
           continue;
         }
 
-        const match = filename.match(/rollout-\d+-(.+)\.jsonl$/);
-        if (!match) {
-          continue;
+        // Match rollout-{timestamp}-{uuid}.jsonl where timestamp is like 2025-11-03T20-35-04
+        // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        const match = filename.match(/rollout-.+-([0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+)\.jsonl$/i);
+        let extractedSessionId: string;
+        if (match) {
+          extractedSessionId = match[1];
+        } else {
+          // Fallback: just strip "rollout-" prefix and ".jsonl" suffix
+          const fallbackId = filename.replace(/^rollout-/, "").replace(/\.jsonl$/, "");
+          if (!fallbackId) {
+            continue;
+          }
+          extractedSessionId = fallbackId;
         }
-
-        const extractedSessionId = match[1];
 
         // Skip if filtering by session ID
         if (sessionId && extractedSessionId !== sessionId) {
