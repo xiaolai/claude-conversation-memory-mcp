@@ -553,7 +553,7 @@ export class ToolHandlers {
    */
   async getFileEvolution(args: Record<string, unknown>): Promise<Types.GetFileEvolutionResponse> {
     const typedArgs = args as unknown as Types.GetFileEvolutionArgs;
-    const { file_path, include_decisions = true, include_commits = true } = typedArgs;
+    const { file_path, include_decisions = true, include_commits = true, limit = 50, offset = 0 } = typedArgs;
 
     const timeline = this.memory.getFileTimeline(file_path);
 
@@ -600,10 +600,14 @@ export class ToolHandlers {
     // Sort by timestamp (descending - most recent first)
     events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
+    // Apply pagination
+    const paginatedEvents = events.slice(offset, offset + limit);
+
     return {
       file_path,
       total_edits: timeline.edits.length,
-      timeline: events,
+      timeline: paginatedEvents,
+      has_more: offset + limit < events.length,
     };
   }
 

@@ -44,3 +44,6 @@ coverage/
 .claude/
 CLAUDE.md
 .claude-flow/
+
+.writers-aid/
+logs_llm/

@@ -115,7 +115,9 @@ describe('ToolHandlers', () => {
       expect(result).toHaveProperty('file_path');
       expect(result).toHaveProperty('total_edits');
       expect(result).toHaveProperty('timeline');
+      expect(result).toHaveProperty('has_more');
       expect(Array.isArray(result.timeline)).toBe(true);
+      expect(typeof result.has_more).toBe('boolean');
     });
 
     it('should exclude decisions when requested', async () => {

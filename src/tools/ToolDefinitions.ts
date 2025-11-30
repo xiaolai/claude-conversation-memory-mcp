@@ -137,7 +137,7 @@ export const TOOLS = {
 
   get_file_evolution: {
     name: "get_file_evolution",
-    description: "Show complete timeline of changes to a file across conversations and commits.",
+    description: "Show complete timeline of changes to a file across conversations and commits. Supports pagination for files with long history.",
     inputSchema: {
       type: "object",
       properties: {
@@ -154,6 +154,16 @@ export const TOOLS = {
           type: "boolean",
           description: "Include git commits (default: true)",
           default: true,
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of timeline events to return (default: 50)",
+          default: 50,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N events for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
         },
       },
       required: ["file_path"],

@@ -40,6 +40,8 @@ export interface GetFileEvolutionArgs {
   file_path: string;
   include_decisions?: boolean;
   include_commits?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
 export interface LinkCommitsToConversationsArgs {
@@ -197,6 +199,7 @@ export interface GetFileEvolutionResponse {
   file_path: string;
   total_edits: number;
   timeline: TimelineEvent[];
+  has_more: boolean;
 }
 
 export interface CommitResult {
