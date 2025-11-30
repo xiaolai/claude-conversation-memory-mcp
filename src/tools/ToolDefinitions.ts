@@ -525,6 +525,11 @@ export const TOOLS = {
           type: "string",
           description: "Path to Claude Code projects directory (default: ~/.claude/projects)",
         },
+        incremental: {
+          type: "boolean",
+          description: "Perform incremental indexing - only index files modified since last indexing (default: false). Set to true for faster re-indexing.",
+          default: false,
+        },
       },
     },
   },

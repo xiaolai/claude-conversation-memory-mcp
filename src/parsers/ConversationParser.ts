@@ -25,7 +25,7 @@
  * ```
  */
 
-import { readFileSync, readdirSync, existsSync } from "fs";
+import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import { nanoid } from "nanoid";
 import { pathToProjectFolderName } from "../utils/sanitization.js";
@@ -328,7 +328,11 @@ export class ConversationParser {
    * const result = parser.parseFromFolder('~/.claude/projects/-Users-me-my-project');
    * ```
    */
-  parseFromFolder(folderPath: string, projectIdentifier?: string): ParseResult {
+  parseFromFolder(
+    folderPath: string,
+    projectIdentifier?: string,
+    lastIndexedMs?: number
+  ): ParseResult {
     const result: ParseResult = {
       conversations: [],
       messages: [],
@@ -351,12 +355,30 @@ export class ConversationParser {
     const files = readdirSync(folderPath).filter((f) => f.endsWith(".jsonl"));
     console.log(`Found ${files.length} conversation file(s) in ${folderPath}`);
 
-    // Parse each file
+    // Parse each file, optionally skipping unchanged files in incremental mode
+    let skippedCount = 0;
     for (const file of files) {
       const filePath = join(folderPath, file);
+
+      // Skip unchanged files in incremental mode
+      if (lastIndexedMs) {
+        try {
+          const stats = statSync(filePath);
+          if (stats.mtimeMs < lastIndexedMs) {
+            skippedCount++;
+            continue;
+          }
+        } catch (_e) {
+          // If we can't stat the file, try to parse it anyway
+        }
+      }
+
       this.parseFile(filePath, result, projectPath);
     }
 
+    if (skippedCount > 0) {
+      console.log(`⏭ Skipped ${skippedCount} unchanged file(s)`);
+    }
     console.log(
       `Parsed ${result.conversations.length} conversations, ${result.messages.length} messages`
     );

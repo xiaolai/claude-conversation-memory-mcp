@@ -49,6 +49,42 @@ export class VectorStore {
   }
 
   /**
+   * Get set of message IDs that already have embeddings
+   */
+  getExistingMessageEmbeddingIds(): Set<string> {
+    const ids = new Set<string>();
+    try {
+      const rows = this.db
+        .prepare("SELECT message_id FROM message_embeddings")
+        .all() as Array<{ message_id: string }>;
+      for (const row of rows) {
+        ids.add(row.message_id);
+      }
+    } catch (_e) {
+      // Table might not exist yet
+    }
+    return ids;
+  }
+
+  /**
+   * Get set of decision IDs that already have embeddings
+   */
+  getExistingDecisionEmbeddingIds(): Set<string> {
+    const ids = new Set<string>();
+    try {
+      const rows = this.db
+        .prepare("SELECT decision_id FROM decision_embeddings")
+        .all() as Array<{ decision_id: string }>;
+      for (const row of rows) {
+        ids.add(row.decision_id);
+      }
+    } catch (_e) {
+      // Table might not exist yet
+    }
+    return ids;
+  }
+
+  /**
    * Ensure vec tables exist with correct dimensions
    */
   private ensureVecTables(dimensions: number): void {

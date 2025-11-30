@@ -551,6 +551,8 @@ export interface IndexAllProjectsArgs {
   include_claude_code?: boolean;
   codex_path?: string;
   claude_projects_path?: string;
+  /** If true, only index files modified since last indexing */
+  incremental?: boolean;
 }
 
 export interface IndexAllProjectsResponse {

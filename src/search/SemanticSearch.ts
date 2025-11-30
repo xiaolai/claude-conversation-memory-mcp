@@ -53,11 +53,23 @@ export class SemanticSearch {
     }
 
     // Filter messages with content
-    const messagesToIndex = messages.filter(
+    const messagesWithContent = messages.filter(
       (m): m is Message & { content: string } => !!m.content && m.content.trim().length > 0
     );
 
-    console.log(`Generating embeddings for ${messagesToIndex.length} messages...`);
+    // Skip messages that already have embeddings (incremental optimization)
+    const existingIds = this.vectorStore.getExistingMessageEmbeddingIds();
+    const messagesToIndex = messagesWithContent.filter((m) => !existingIds.has(m.id));
+
+    if (messagesToIndex.length === 0) {
+      console.log(`⏭ All ${messagesWithContent.length} messages already have embeddings`);
+      return;
+    }
+
+    if (existingIds.size > 0) {
+      console.log(`⏭ Skipping ${messagesWithContent.length - messagesToIndex.length} already-embedded messages`);
+    }
+    console.log(`Generating embeddings for ${messagesToIndex.length} new messages...`);
 
     // Generate embeddings in batches
     const texts = messagesToIndex.map((m) => m.content);
@@ -88,8 +100,22 @@ export class SemanticSearch {
       return;
     }
 
+    // Skip decisions that already have embeddings (incremental optimization)
+    const existingIds = this.vectorStore.getExistingDecisionEmbeddingIds();
+    const decisionsToIndex = decisions.filter((d) => !existingIds.has(d.id));
+
+    if (decisionsToIndex.length === 0) {
+      console.log(`⏭ All ${decisions.length} decisions already have embeddings`);
+      return;
+    }
+
+    if (existingIds.size > 0) {
+      console.log(`⏭ Skipping ${decisions.length - decisionsToIndex.length} already-embedded decisions`);
+    }
+    console.log(`Generating embeddings for ${decisionsToIndex.length} new decisions...`);
+
     // Generate embeddings for decision text + rationale
-    const texts = decisions.map((d) => {
+    const texts = decisionsToIndex.map((d) => {
       const parts = [d.decision_text];
       if (d.rationale) {parts.push(d.rationale);}
       if (d.context) {parts.push(d.context);}
@@ -99,9 +125,9 @@ export class SemanticSearch {
     const embeddings = await embedder.embedBatch(texts, 32);
 
     // Store embeddings
-    for (let i = 0; i < decisions.length; i++) {
+    for (let i = 0; i < decisionsToIndex.length; i++) {
       await this.vectorStore.storeDecisionEmbedding(
-        decisions[i].id,
+        decisionsToIndex[i].id,
         embeddings[i]
       );
     }

@@ -89,7 +89,11 @@ export class CodexConversationParser {
    * @param sessionId - Optional specific session ID to parse
    * @returns ParseResult with all extracted entities
    */
-  parseSession(codexPath: string, sessionId?: string): ParseResult {
+  parseSession(
+    codexPath: string,
+    sessionId?: string,
+    lastIndexedMs?: number
+  ): ParseResult {
     const sessionsDir = join(codexPath, "sessions");
 
     if (!existsSync(sessionsDir)) {
@@ -103,12 +107,22 @@ export class CodexConversationParser {
     const file_edits: FileEdit[] = [];
     const thinking_blocks: ThinkingBlock[] = [];
     const indexed_folders: string[] = [];
+    let skippedCount = 0;
 
     // Recursively find all .jsonl files in date-hierarchical structure
     const sessionFiles = this.findSessionFiles(sessionsDir);
 
     for (const sessionFile of sessionFiles) {
       try {
+        // Skip unchanged files in incremental mode
+        if (lastIndexedMs) {
+          const stats = statSync(sessionFile);
+          if (stats.mtimeMs < lastIndexedMs) {
+            skippedCount++;
+            continue;
+          }
+        }
+
         // Extract session ID from filename: rollout-{timestamp}-{uuid}.jsonl
         const filename = sessionFile.split("/").pop();
         if (!filename) {
@@ -144,6 +158,10 @@ export class CodexConversationParser {
       } catch (error) {
         console.warn(`Failed to parse Codex session file ${sessionFile}:`, error);
       }
+    }
+
+    if (skippedCount > 0) {
+      console.log(`⏭ Skipped ${skippedCount} unchanged Codex session file(s)`);
     }
 
     return {

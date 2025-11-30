@@ -1831,6 +1831,7 @@ export class ToolHandlers {
       include_claude_code = true,
       codex_path = join(homedir(), ".codex"),
       claude_projects_path = join(homedir(), ".claude", "projects"),
+      incremental = false,
     } = typedArgs;
 
     const globalIndex = new GlobalIndex();
@@ -1864,9 +1865,18 @@ export class ToolHandlers {
           const codexDb = new SQLiteManager({ dbPath: codexDbPath });
           const codexStorage = new ConversationStorage(codexDb);
 
+          // Get last indexed time for incremental mode
+          let codexLastIndexedMs: number | undefined;
+          if (incremental) {
+            const existingProject = globalIndex.getProject(codex_path);
+            if (existingProject) {
+              codexLastIndexedMs = existingProject.last_indexed;
+            }
+          }
+
           // Parse Codex sessions
           const parser = new CodexConversationParser();
-          const parseResult = parser.parseSession(codex_path);
+          const parseResult = parser.parseSession(codex_path, undefined, codexLastIndexedMs);
 
           // Store all parsed data
           await codexStorage.storeConversations(parseResult.conversations);
@@ -1982,9 +1992,18 @@ export class ToolHandlers {
               const projectDb = new SQLiteManager({ dbPath: projectDbPath });
               const projectStorage = new ConversationStorage(projectDb);
 
+              // Get last indexed time for incremental mode
+              let lastIndexedMs: number | undefined;
+              if (incremental) {
+                const existingProject = globalIndex.getProject(folderPath);
+                if (existingProject) {
+                  lastIndexedMs = existingProject.last_indexed;
+                }
+              }
+
               // Parse Claude Code conversations directly from this folder
               const parser = new ConversationParser();
-              const parseResult = parser.parseFromFolder(folderPath);
+              const parseResult = parser.parseFromFolder(folderPath, undefined, lastIndexedMs);
 
               // Skip empty projects
               if (parseResult.messages.length === 0) {
