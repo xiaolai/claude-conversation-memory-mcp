@@ -414,14 +414,22 @@ export class ConversationMemory {
       console.log(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
     }
 
+    // Build set of remaining message IDs after filtering
+    const remainingMessageIds = new Set(
+      result.messages
+        .filter(m => !excludedMessageIds.has(m.id))
+        .map(m => m.id)
+    );
+
     // Filter messages and related entities
+    // IMPORTANT: file_edits must also be filtered to avoid FK constraint violations
     return {
       conversations: result.conversations, // Keep ALL conversations
       messages: result.messages.filter(m => !excludedMessageIds.has(m.id)),
       tool_uses: result.tool_uses.filter(t => !excludedToolUseIds.has(t.id)),
       tool_results: result.tool_results.filter(tr => !excludedToolUseIds.has(tr.tool_use_id)),
-      file_edits: result.file_edits, // Keep all file edits
-      thinking_blocks: result.thinking_blocks.filter(tb => !excludedMessageIds.has(tb.message_id)),
+      file_edits: result.file_edits.filter(fe => remainingMessageIds.has(fe.message_id)),
+      thinking_blocks: result.thinking_blocks.filter(tb => remainingMessageIds.has(tb.message_id)),
       indexed_folders: result.indexed_folders, // Preserve folder metadata
     };
   }

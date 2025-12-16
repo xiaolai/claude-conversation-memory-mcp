@@ -221,30 +221,42 @@ export class ConversationParser {
     // Convert project path to Claude projects directory name
     const projectDirName = pathToProjectFolderName(projectPath);
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+    const projectsBaseDir = join(homeDir, ".claude", "projects");
 
-    // Check both modern and legacy naming conventions
-    const modernDir = join(homeDir, ".claude", "projects", projectDirName);
-    const legacyDirName = projectDirName.replace(/\./g, '-');
-    const legacyDir = join(homeDir, ".claude", "projects", legacyDirName);
+    // Generate path variants to handle Claude Code's potential encoding differences
+    // Claude Code may encode hyphens as underscores or vice versa in path components
+    const pathVariants = this.generatePathVariants(projectDirName);
 
     // Collect directories that exist
     const dirsToCheck: string[] = [];
+    const checkedPaths: string[] = [];
 
-    if (existsSync(modernDir)) {
-      dirsToCheck.push(modernDir);
-      console.log(`Found modern naming: ${projectDirName}`);
-    }
+    for (const variant of pathVariants) {
+      const variantDir = join(projectsBaseDir, variant);
+      checkedPaths.push(variantDir);
 
-    if (legacyDirName !== projectDirName && existsSync(legacyDir)) {
-      dirsToCheck.push(legacyDir);
-      console.log(`Found legacy naming: ${legacyDirName}`);
+      if (existsSync(variantDir)) {
+        // Check if this directory has any .jsonl files
+        try {
+          const files = readdirSync(variantDir).filter(f => f.endsWith(".jsonl"));
+          if (files.length > 0 && !dirsToCheck.includes(variantDir)) {
+            dirsToCheck.push(variantDir);
+            console.log(`Found conversation directory: ${variant}`);
+          }
+        } catch (_e) {
+          // Directory exists but can't be read, skip it
+        }
+      }
     }
 
     if (dirsToCheck.length === 0) {
       console.warn(`⚠️ No conversation directories found`);
-      console.warn(`  Checked: ${modernDir}`);
-      if (legacyDirName !== projectDirName) {
-        console.warn(`  Checked: ${legacyDir}`);
+      console.warn(`  Checked ${checkedPaths.length} path variants:`);
+      for (const path of checkedPaths.slice(0, 5)) {
+        console.warn(`    - ${path}`);
+      }
+      if (checkedPaths.length > 5) {
+        console.warn(`    ... and ${checkedPaths.length - 5} more`);
       }
       return {
         conversations: [],
@@ -687,6 +699,103 @@ export class ConversationParser {
         }
       }
     }
+  }
+
+  /**
+   * Generate path variants to handle potential encoding differences.
+   *
+   * Claude Code may encode paths differently than expected:
+   * - Hyphens in path components might become underscores
+   * - Underscores might become hyphens
+   * - Dots might become hyphens (legacy)
+   *
+   * This method generates multiple variants to try when searching for directories.
+   *
+   * @example
+   * Input: "-Users-myid-GIT-projects-myProject"
+   * Output: [
+   *   "-Users-myid-GIT-projects-myProject",     // Original
+   *   "-Users-myid-GIT_projects-myProject",     // Hyphens in components -> underscores
+   *   "-Users-myid-GIT-projects-myProject",     // Dots -> hyphens (legacy)
+   * ]
+   */
+  private generatePathVariants(projectDirName: string): string[] {
+    const variants = new Set<string>();
+
+    // 1. Original encoding (as computed by pathToProjectFolderName)
+    variants.add(projectDirName);
+
+    // 2. Legacy: dots replaced with hyphens
+    const legacyVariant = projectDirName.replace(/\./g, '-');
+    variants.add(legacyVariant);
+
+    // 3. Try swapping hyphens and underscores within path components
+    // Path format: "-Component1-Component2-Component3" or "Drive-Component1-Component2"
+    // We need to be careful not to change the leading hyphen or the separating hyphens
+
+    // Split into components by hyphen (the first element might be empty for Unix paths starting with -)
+    const parts = projectDirName.split('-');
+
+    // Try converting internal hyphens within multi-hyphen component names to underscores
+    // This handles cases like "GIT-projects" becoming "GIT_projects"
+
+    // Strategy: For each part that looks like it might have been originally hyphenated,
+    // create a variant with underscores
+    const hyphenToUnderscoreVariant = parts
+      .map((part) => {
+        // Skip empty parts and single chars (likely path separators)
+        if (part.length === 0) {
+          return part;
+        }
+
+        // Convert any underscores in parts to hyphens (in case source had underscores)
+        return part.replace(/_/g, '-');
+      })
+      .join('-');
+
+    const underscoreToHyphenVariant = parts
+      .map((part) => {
+        if (part.length === 0) {
+          return part;
+        }
+        // Convert any hyphens that might be internal to underscores
+        // This is tricky because hyphens are also used as separators
+        return part;
+      })
+      .join('-');
+
+    variants.add(hyphenToUnderscoreVariant);
+    variants.add(underscoreToHyphenVariant);
+
+    // 4. Try a variant where we replace all underscores with hyphens
+    const allUnderscoresToHyphens = projectDirName.replace(/_/g, '-');
+    variants.add(allUnderscoresToHyphens);
+
+    // 5. Try a variant where path components with hyphens have them as underscores
+    // e.g., "GIT-projects" -> "GIT_projects"
+    // We need to identify which consecutive hyphens are part of component names vs separators
+    // A simple heuristic: look for patterns like "X-Y" where X and Y are both alphanumeric
+    const internalHyphensToUnderscores = projectDirName.replace(
+      /([a-zA-Z0-9])[-]([a-zA-Z0-9])/g,
+      '$1_$2'
+    );
+    variants.add(internalHyphensToUnderscores);
+
+    // 6. Also try the reverse: convert underscores to hyphens
+    const internalUnderscoresToHyphens = projectDirName.replace(
+      /([a-zA-Z0-9])[_]([a-zA-Z0-9])/g,
+      '$1-$2'
+    );
+    variants.add(internalUnderscoresToHyphens);
+
+    // Apply the same transformations to the legacy variant
+    const legacyInternalHyphensToUnderscores = legacyVariant.replace(
+      /([a-zA-Z0-9])[-]([a-zA-Z0-9])/g,
+      '$1_$2'
+    );
+    variants.add(legacyInternalHyphensToUnderscores);
+
+    return Array.from(variants);
   }
 
   /**
