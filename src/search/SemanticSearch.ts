@@ -254,6 +254,31 @@ export class SemanticSearch {
   }
 
   /**
+   * Sanitize query for FTS5 MATCH syntax.
+   * FTS5 has special characters that need escaping: . * " - + ( ) OR AND NOT
+   * We wrap each word in double quotes to treat them as literal strings.
+   */
+  private sanitizeFtsQuery(query: string): string {
+    // Split into words and wrap each in double quotes to escape special chars
+    // Also escape any existing double quotes within words
+    const words = query.trim().split(/\s+/).filter(w => w.length > 0);
+
+    if (words.length === 0) {
+      return '""'; // Empty query
+    }
+
+    // Escape double quotes and wrap each word
+    const escapedWords = words.map(word => {
+      // Escape internal double quotes by doubling them
+      const escaped = word.replace(/"/g, '""');
+      return `"${escaped}"`;
+    });
+
+    // Join with space (implicit AND in FTS5)
+    return escapedWords.join(' ');
+  }
+
+  /**
    * Fallback to full-text search when embeddings unavailable
    */
   private fallbackFullTextSearch(
@@ -261,6 +286,9 @@ export class SemanticSearch {
     limit: number,
     filter?: SearchFilter
   ): SearchResult[] {
+    // Sanitize the query for FTS5 syntax
+    const ftsQuery = this.sanitizeFtsQuery(query);
+
     let sql = `
       SELECT m.*, c.project_path, c.git_branch, c.claude_version
       FROM messages m
@@ -270,7 +298,7 @@ export class SemanticSearch {
       )
     `;
 
-    const params: (string | number)[] = [query];
+    const params: (string | number)[] = [ftsQuery];
 
     // Apply filters
     if (filter) {
@@ -323,6 +351,9 @@ export class SemanticSearch {
     query: string,
     limit: number
   ): DecisionSearchResult[] {
+    // Sanitize the query for FTS5 syntax
+    const ftsQuery = this.sanitizeFtsQuery(query);
+
     const sql = `
       SELECT d.*, c.project_path, c.git_branch
       FROM decisions d
@@ -334,7 +365,7 @@ export class SemanticSearch {
       LIMIT ?
     `;
 
-    const rows = this.db.prepare(sql).all(query, limit) as DecisionRow[];
+    const rows = this.db.prepare(sql).all(ftsQuery, limit) as DecisionRow[];
 
     return rows.map((row) => {
       const conversation = this.getConversation(row.conversation_id);
