@@ -1513,9 +1513,9 @@ export class ToolHandlers {
     if (context_types.includes("commits")) {
       const commits = this.db.getDatabase()
         .prepare(`
-          SELECT commit_hash, message, timestamp, files_affected
-          FROM commits
-          WHERE message LIKE ? ${file_path ? 'AND files_affected LIKE ?' : ''}
+          SELECT hash, message, timestamp, files_changed
+          FROM git_commits
+          WHERE message LIKE ? ${file_path ? 'AND files_changed LIKE ?' : ''}
           ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
           ORDER BY timestamp DESC
           LIMIT ?
@@ -1526,17 +1526,17 @@ export class ToolHandlers {
           ...(date_range ? [date_range[0], date_range[1]] : []),
           limit
         ) as Array<{
-          commit_hash: string;
+          hash: string;
           message: string;
           timestamp: number;
-          files_affected: string;
+          files_changed: string;
         }>;
 
       recalled.commits = commits.map(c => ({
-        commit_hash: c.commit_hash,
+        commit_hash: c.hash,
         message: c.message,
         timestamp: new Date(c.timestamp).toISOString(),
-        files_affected: JSON.parse(c.files_affected),
+        files_affected: JSON.parse(c.files_changed || "[]"),
       }));
       totalItems += recalled.commits.length;
 

@@ -1,6 +1,6 @@
 {
   "name": "claude-conversation-memory-mcp",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "MCP server for indexing and searching Claude Code conversation history with decision tracking, git integration, and project migration/merge",
   "main": "dist/index.js",
   "type": "module",
