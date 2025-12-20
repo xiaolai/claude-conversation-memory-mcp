@@ -92,18 +92,10 @@ export class EmbeddingGenerator {
 
   /**
    * Auto-detect best available provider
-   * Tries in order: Ollama (fast, free, local) → Transformers (slower startup, offline)
+   * Tries in order: Transformers.js (bundled, reliable) → Ollama (fast if running)
    */
   private static async autoDetectProvider(): Promise<EmbeddingProvider> {
-    // Try Ollama first (fastest, no download required if already running)
-    const ollama = new OllamaEmbeddings();
-    await ollama.initialize();
-    if (ollama.isAvailable()) {
-      console.log("✓ Auto-detected: Using Ollama embeddings");
-      return ollama;
-    }
-
-    // Try Transformers.js (works offline, but requires download on first run)
+    // Try Transformers.js first (bundled dependency, always works offline)
     const transformers = new TransformersEmbeddings();
     await transformers.initialize();
     if (transformers.isAvailable()) {
@@ -111,12 +103,20 @@ export class EmbeddingGenerator {
       return transformers;
     }
 
+    // Try Ollama as fallback (requires Ollama to be running)
+    const ollama = new OllamaEmbeddings();
+    await ollama.initialize();
+    if (ollama.isAvailable()) {
+      console.log("✓ Auto-detected: Using Ollama embeddings");
+      return ollama;
+    }
+
     // No provider available - return transformers as placeholder
     // It will fail gracefully when used, falling back to FTS
     console.warn("⚠️ No embedding provider available");
     console.warn("   Options:");
-    console.warn("   1. Install Ollama: https://ollama.com");
-    console.warn("   2. Install @xenova/transformers: npm install @xenova/transformers");
+    console.warn("   1. Ensure @xenova/transformers is properly installed");
+    console.warn("   2. Install Ollama: https://ollama.com");
     console.warn("   3. Configure OpenAI: Set OPENAI_API_KEY environment variable");
     console.warn("   Falling back to full-text search only.");
 

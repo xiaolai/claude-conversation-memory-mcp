@@ -1,6 +1,6 @@
 {
   "name": "claude-conversation-memory-mcp",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "MCP server for indexing and searching Claude Code conversation history with decision tracking, git integration, and project migration/merge",
   "main": "dist/index.js",
   "type": "module",
@@ -54,6 +54,7 @@
   "homepage": "https://github.com/xiaolai/claude-conversation-memory-mcp#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "@xenova/transformers": "^2.17.2",
     "better-sqlite3": "^11.10.0",
     "chalk": "^5.3.0",
     "cli-table3": "^0.6.5",
@@ -65,7 +66,6 @@
     "sqlite-vec": "^0.1.6"
   },
   "optionalDependencies": {
-    "@xenova/transformers": "^2.17.2",
     "openai": "^6.9.1"
   },
   "devDependencies": {
