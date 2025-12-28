@@ -30,14 +30,14 @@ export class DocumentationGenerator {
    * @returns Markdown documentation
    */
   async generate(options: DocumentationOptions, codeGraphData: CodeGraphRagData): Promise<string> {
-    console.log('\n📚 Generating Comprehensive Documentation');
-    console.log(`Project: ${options.projectPath}`);
-    console.log(`Scope: ${options.scope}`);
+    console.error('\n📚 Generating Comprehensive Documentation');
+    console.error(`Project: ${options.projectPath}`);
+    console.error(`Scope: ${options.scope}`);
     if (options.sessionId) {
-      console.log(`Session: ${options.sessionId}`);
+      console.error(`Session: ${options.sessionId}`);
     }
     if (options.moduleFilter) {
-      console.log(`Filter: ${options.moduleFilter}`);
+      console.error(`Filter: ${options.moduleFilter}`);
     }
 
     try {
@@ -56,10 +56,10 @@ export class DocumentationGenerator {
       // Step 4: Format as markdown
       const documentation = this.formatter.format(linkedData, options);
 
-      console.log('✅ Documentation generated successfully');
-      console.log(`   Modules: ${linkedData.modules.length}`);
-      console.log(`   Decisions: ${linkedData.statistics.totalDecisions}`);
-      console.log(`   Mistakes: ${linkedData.statistics.totalMistakes}`);
+      console.error('✅ Documentation generated successfully');
+      console.error(`   Modules: ${linkedData.modules.length}`);
+      console.error(`   Decisions: ${linkedData.statistics.totalDecisions}`);
+      console.error(`   Mistakes: ${linkedData.statistics.totalMistakes}`);
 
       return documentation;
 

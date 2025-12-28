@@ -34,10 +34,10 @@ export class VectorStore {
       this.db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS vec_test USING vec0(test float[1])");
       this.db.exec("DROP TABLE vec_test");
       this.hasVecExtension = true;
-      console.log("✓ sqlite-vec extension detected");
+      console.error("✓ sqlite-vec extension detected");
     } catch (_error) {
       this.hasVecExtension = false;
-      console.log("⚠ sqlite-vec not available, using BLOB fallback");
+      console.error("⚠ sqlite-vec not available, using BLOB fallback");
     }
   }
 
@@ -159,7 +159,7 @@ export class VectorStore {
       try {
         this.ensureVecTables(embedding.length);
       } catch (error) {
-        console.warn("Failed to ensure vec tables:", (error as Error).message);
+        console.error("Failed to ensure vec tables:", (error as Error).message);
         // Content already stored in BLOB table, so we can continue
         return;
       }
@@ -185,7 +185,7 @@ export class VectorStore {
         // Only log non-UNIQUE-constraint errors
         const errorMessage = (error as Error).message;
         if (!errorMessage.includes("UNIQUE constraint")) {
-          console.warn("Vec embedding storage failed, using BLOB only:", errorMessage);
+          console.error("Vec embedding storage failed, using BLOB only:", errorMessage);
         }
         // Content already stored in BLOB table, so search will still work
       }
@@ -362,7 +362,7 @@ export class VectorStore {
   private bufferToFloat32Array(buffer: Buffer): Float32Array {
     // Validate byte alignment (must be divisible by 4 for Float32)
     if (buffer.byteLength % 4 !== 0) {
-      console.warn(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
+      console.error(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
       return new Float32Array(0);
     }
 

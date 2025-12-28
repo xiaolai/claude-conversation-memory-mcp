@@ -26,14 +26,14 @@ export class CrossReferencer {
    * Link code and conversation data
    */
   async link(codeData: CodeData, conversationData: ConversationData): Promise<LinkedData> {
-    console.log('🔗 Cross-referencing code and conversations...');
+    console.error('🔗 Cross-referencing code and conversations...');
 
     const modules = this.groupIntoModules(codeData, conversationData);
     const timeline = this.buildTimeline(conversationData);
     const qualityReport = this.buildQualityReport(codeData, conversationData);
     const statistics = this.calculateStatistics(codeData, conversationData);
 
-    console.log(`  Created ${modules.length} module summaries`);
+    console.error(`  Created ${modules.length} module summaries`);
 
     return {
       modules,

@@ -28,14 +28,14 @@ export class CodeAnalyzer {
    * Process code graph data from CODE-GRAPH-RAG-MCP
    */
   async analyze(codeGraphData: CodeGraphRagData): Promise<CodeData> {
-    console.log('🔍 Processing codebase structure...');
+    console.error('🔍 Processing codebase structure...');
 
     const entities = this.parseEntities(codeGraphData.entities || []);
     const files = this.groupEntitiesByFile(entities);
     const hotspots = this.parseHotspots(codeGraphData.hotspots || []);
     const clones = this.parseClones(codeGraphData.clones || []);
 
-    console.log(`  Found ${entities.length} entities in ${files.length} files`);
+    console.error(`  Found ${entities.length} entities in ${files.length} files`);
 
     return {
       entities,

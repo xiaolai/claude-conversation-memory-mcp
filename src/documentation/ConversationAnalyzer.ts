@@ -13,7 +13,7 @@ export class ConversationAnalyzer {
    * Analyze conversations for a project
    */
   async analyze(projectPath: string, sessionId?: string): Promise<ConversationData> {
-    console.log('📊 Analyzing conversation history...');
+    console.error('📊 Analyzing conversation history...');
 
     const decisions = this.getDecisions(projectPath, sessionId);
     const mistakes = this.getMistakes(projectPath, sessionId);
@@ -21,7 +21,7 @@ export class ConversationAnalyzer {
     const fileEdits = this.getFileEdits(projectPath, sessionId);
     const commits = this.getGitCommits(projectPath, sessionId);
 
-    console.log(`  Found ${decisions.length} decisions, ${mistakes.length} mistakes`);
+    console.error(`  Found ${decisions.length} decisions, ${mistakes.length} mistakes`);
 
     return {
       decisions,

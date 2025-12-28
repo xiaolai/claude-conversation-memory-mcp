@@ -110,7 +110,7 @@ export class ConversationStorage {
    * ```typescript
    * const stats = storage.getCacheStats();
    * if (stats) {
-   *   console.log(`Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`);
+   *   console.error(`Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`);
    * }
    * ```
    */
@@ -179,7 +179,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${conversations.length} conversations`);
+    console.error(`✓ Stored ${conversations.length} conversations`);
   }
 
   /**
@@ -192,7 +192,7 @@ export class ConversationStorage {
    * ```typescript
    * const conv = storage.getConversation('conv-123');
    * if (conv) {
-   *   console.log(`${conv.message_count} messages on ${conv.git_branch}`);
+   *   console.error(`${conv.message_count} messages on ${conv.git_branch}`);
    * }
    * ```
    */
@@ -221,7 +221,7 @@ export class ConversationStorage {
     try {
       metadata = JSON.parse(row.metadata || "{}");
     } catch (_e) {
-      console.warn(`Invalid JSON in conversation ${id} metadata`);
+      console.error(`Invalid JSON in conversation ${id} metadata`);
     }
 
     const result = {
@@ -293,7 +293,7 @@ export class ConversationStorage {
     // FTS5 with external content requires explicit rebuild after inserts
     this.rebuildMessagesFts();
 
-    console.log(`✓ Stored ${messages.length} messages`);
+    console.error(`✓ Stored ${messages.length} messages`);
   }
 
   /**
@@ -306,7 +306,7 @@ export class ConversationStorage {
     } catch (error) {
       // FTS rebuild may fail if table doesn't exist or schema mismatch
       // Log but don't throw - FTS is optional fallback
-      console.warn("FTS rebuild warning:", (error as Error).message);
+      console.error("FTS rebuild warning:", (error as Error).message);
     }
   }
 
@@ -339,7 +339,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${toolUses.length} tool uses`);
+    console.error(`✓ Stored ${toolUses.length} tool uses`);
   }
 
   // ==================== Tool Results ====================
@@ -375,7 +375,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${toolResults.length} tool results`);
+    console.error(`✓ Stored ${toolResults.length} tool results`);
   }
 
   // ==================== File Edits ====================
@@ -416,7 +416,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${fileEdits.length} file edits`);
+    console.error(`✓ Stored ${fileEdits.length} file edits`);
   }
 
   /**
@@ -477,7 +477,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${blocks.length} thinking blocks`);
+    console.error(`✓ Stored ${blocks.length} thinking blocks`);
   }
 
   // ==================== Decisions ====================
@@ -521,7 +521,7 @@ export class ConversationStorage {
     // FTS5 with external content requires explicit rebuild after inserts
     this.rebuildDecisionsFts();
 
-    console.log(`✓ Stored ${decisions.length} decisions`);
+    console.error(`✓ Stored ${decisions.length} decisions`);
   }
 
   /**
@@ -534,7 +534,7 @@ export class ConversationStorage {
     } catch (error) {
       // FTS rebuild may fail if table doesn't exist or schema mismatch
       // Log but don't throw - FTS is optional fallback
-      console.warn("FTS decisions rebuild warning:", (error as Error).message);
+      console.error("FTS decisions rebuild warning:", (error as Error).message);
     }
   }
 
@@ -608,7 +608,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${commits.length} git commits`);
+    console.error(`✓ Stored ${commits.length} git commits`);
   }
 
   getCommitsForFile(filePath: string): GitCommit[] {
@@ -672,7 +672,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${mistakes.length} mistakes`);
+    console.error(`✓ Stored ${mistakes.length} mistakes`);
   }
 
   // ==================== Requirements ====================
@@ -708,7 +708,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${requirements.length} requirements`);
+    console.error(`✓ Stored ${requirements.length} requirements`);
   }
 
   // ==================== Validations ====================
@@ -744,7 +744,7 @@ export class ConversationStorage {
       }
     });
 
-    console.log(`✓ Stored ${validations.length} validations`);
+    console.error(`✓ Stored ${validations.length} validations`);
   }
 
   // ==================== Queries ====================
@@ -765,9 +765,9 @@ export class ConversationStorage {
    * @example
    * ```typescript
    * const timeline = storage.getFileTimeline('src/index.ts');
-   * console.log(`${timeline.edits.length} edits`);
-   * console.log(`${timeline.commits.length} commits`);
-   * console.log(`${timeline.decisions.length} decisions`);
+   * console.error(`${timeline.edits.length} edits`);
+   * console.error(`${timeline.commits.length} commits`);
+   * console.error(`${timeline.decisions.length} decisions`);
    * ```
    */
   getFileTimeline(filePath: string): {
@@ -824,9 +824,9 @@ export class ConversationStorage {
    * @example
    * ```typescript
    * const stats = storage.getStats();
-   * console.log(`Indexed ${stats.conversations.count} conversations`);
-   * console.log(`Extracted ${stats.decisions.count} decisions`);
-   * console.log(`Linked ${stats.git_commits.count} commits`);
+   * console.error(`Indexed ${stats.conversations.count} conversations`);
+   * console.error(`Extracted ${stats.decisions.count} decisions`);
+   * console.error(`Linked ${stats.git_commits.count} commits`);
    * ```
    */
   getStats(): {

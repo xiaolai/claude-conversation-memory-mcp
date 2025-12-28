@@ -18,7 +18,7 @@
  * ```typescript
  * const parser = new CodexConversationParser();
  * const result = parser.parseSessions('/Users/username/.codex');
- * console.log(`Parsed ${result.conversations.length} Codex sessions`);
+ * console.error(`Parsed ${result.conversations.length} Codex sessions`);
  * ```
  */
 
@@ -164,12 +164,12 @@ export class CodexConversationParser {
           indexed_folders.push(sessionDir);
         }
       } catch (error) {
-        console.warn(`Failed to parse Codex session file ${sessionFile}:`, error);
+        console.error(`Failed to parse Codex session file ${sessionFile}:`, error);
       }
     }
 
     if (skippedCount > 0) {
-      console.log(`⏭ Skipped ${skippedCount} unchanged Codex session file(s)`);
+      console.error(`⏭ Skipped ${skippedCount} unchanged Codex session file(s)`);
     }
 
     return {

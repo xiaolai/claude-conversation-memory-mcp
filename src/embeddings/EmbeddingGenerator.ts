@@ -29,20 +29,20 @@ export class EmbeddingGenerator {
     // Validate configuration
     const validation = ConfigLoader.validate(config);
     if (!validation.valid) {
-      console.warn("⚠️ Invalid embedding configuration:");
-      validation.errors.forEach((error) => console.warn(`   - ${error}`));
-      console.warn("   Falling back to auto-detection...");
+      console.error("⚠️ Invalid embedding configuration:");
+      validation.errors.forEach((error) => console.error(`   - ${error}`));
+      console.error("   Falling back to auto-detection...");
     }
 
     // Try to create provider based on config (or auto-detect)
     let provider: EmbeddingProvider;
 
     if (validation.valid) {
-      console.log(`Attempting to use ${config.provider} embeddings...`);
+      console.error(`Attempting to use ${config.provider} embeddings...`);
       provider = this.createProvider(config.provider, config);
     } else {
       // Auto-detect: try providers in order of preference
-      console.log("Auto-detecting available embedding provider...");
+      console.error("Auto-detecting available embedding provider...");
       provider = await this.autoDetectProvider();
     }
 
@@ -51,7 +51,7 @@ export class EmbeddingGenerator {
 
     // If provider is not available, try fallback
     if (!provider.isAvailable()) {
-      console.warn(`⚠️ ${config.provider} provider not available, trying fallback...`);
+      console.error(`⚠️ ${config.provider} provider not available, trying fallback...`);
       provider = await this.autoDetectProvider();
       await provider.initialize();
     }
@@ -99,7 +99,7 @@ export class EmbeddingGenerator {
     const transformers = new TransformersEmbeddings();
     await transformers.initialize();
     if (transformers.isAvailable()) {
-      console.log("✓ Auto-detected: Using Transformers.js embeddings");
+      console.error("✓ Auto-detected: Using Transformers.js embeddings");
       return transformers;
     }
 
@@ -107,18 +107,18 @@ export class EmbeddingGenerator {
     const ollama = new OllamaEmbeddings();
     await ollama.initialize();
     if (ollama.isAvailable()) {
-      console.log("✓ Auto-detected: Using Ollama embeddings");
+      console.error("✓ Auto-detected: Using Ollama embeddings");
       return ollama;
     }
 
     // No provider available - return transformers as placeholder
     // It will fail gracefully when used, falling back to FTS
-    console.warn("⚠️ No embedding provider available");
-    console.warn("   Options:");
-    console.warn("   1. Ensure @xenova/transformers is properly installed");
-    console.warn("   2. Install Ollama: https://ollama.com");
-    console.warn("   3. Configure OpenAI: Set OPENAI_API_KEY environment variable");
-    console.warn("   Falling back to full-text search only.");
+    console.error("⚠️ No embedding provider available");
+    console.error("   Options:");
+    console.error("   1. Ensure @xenova/transformers is properly installed");
+    console.error("   2. Install Ollama: https://ollama.com");
+    console.error("   3. Configure OpenAI: Set OPENAI_API_KEY environment variable");
+    console.error("   Falling back to full-text search only.");
 
     return transformers; // Return uninitialized provider (will fail gracefully)
   }

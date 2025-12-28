@@ -84,7 +84,7 @@ export class ConfigLoader {
       const content = readFileSync(path, "utf-8");
       return JSON.parse(content);
     } catch (error) {
-      console.warn(`Warning: Could not load config file ${path}:`, error);
+      console.error(`Warning: Could not load config file ${path}:`, error);
       return null;
     }
   }

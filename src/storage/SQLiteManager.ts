@@ -94,11 +94,11 @@ export class SQLiteManager {
   private loadVectorExtension(): void {
     try {
       sqliteVec.load(this.db);
-      console.log("✓ sqlite-vec extension loaded");
+      console.error("✓ sqlite-vec extension loaded");
       // Note: Vec tables will be created when embedding dimensions are known
     } catch (error) {
-      console.warn("⚠️ Failed to load sqlite-vec extension:", (error as Error).message);
-      console.warn("   Vector search will use BLOB fallback");
+      console.error("⚠️ Failed to load sqlite-vec extension:", (error as Error).message);
+      console.error("   Vector search will use BLOB fallback");
     }
   }
 
@@ -120,7 +120,7 @@ export class SQLiteManager {
         if (result) {
           // Tables exist, assume they have correct dimensions
           // (Recreating would lose data)
-          console.log(`✓ sqlite-vec virtual tables already exist`);
+          console.error(`✓ sqlite-vec virtual tables already exist`);
           return;
         }
       } catch {
@@ -146,10 +146,10 @@ export class SQLiteManager {
         )
       `);
 
-      console.log(`✓ sqlite-vec virtual tables created (${dimensions} dimensions)`);
+      console.error(`✓ sqlite-vec virtual tables created (${dimensions} dimensions)`);
     } catch (error) {
-      console.warn("⚠️ Failed to create vec virtual tables:", (error as Error).message);
-      console.warn("   Will fall back to BLOB storage");
+      console.error("⚠️ Failed to create vec virtual tables:", (error as Error).message);
+      console.error("   Will fall back to BLOB storage");
     }
   }
 
@@ -225,7 +225,7 @@ export class SQLiteManager {
 
           if (!hasSourceType || !hasMessageCount) {
             // Legacy database with incompatible schema - drop and recreate
-            console.warn(
+            console.error(
               "⚠️ Legacy database detected with incompatible schema. Recreating..."
             );
 
@@ -246,11 +246,11 @@ export class SQLiteManager {
               }
             }
 
-            console.log("Legacy tables dropped");
+            console.error("Legacy tables dropped");
           }
         }
 
-        console.log("Initializing database schema...");
+        console.error("Initializing database schema...");
 
         // Read and execute schema.sql
         const schemaPath = join(__dirname, "schema.sql");
@@ -267,7 +267,7 @@ export class SQLiteManager {
           )
           .run(3, Date.now(), "Initial schema with fixed FTS tables");
 
-        console.log("Database schema initialized successfully");
+        console.error("Database schema initialized successfully");
       } else {
         // Apply migrations if needed
         this.applyMigrations();
@@ -287,7 +287,7 @@ export class SQLiteManager {
     // Migration 1 -> 2: Add source_type column to conversations table
     if (currentVersion < 2) {
       try {
-        console.log("Applying migration: Adding source_type column...");
+        console.error("Applying migration: Adding source_type column...");
 
         // Check if column already exists (in case of partial migration)
         const columns = this.db
@@ -312,7 +312,7 @@ export class SQLiteManager {
           )
           .run(2, Date.now(), "Add source_type column and global index support");
 
-        console.log("Migration v2 applied successfully");
+        console.error("Migration v2 applied successfully");
       } catch (error) {
         console.error("Error applying migration v2:", error);
         throw error;
@@ -322,7 +322,7 @@ export class SQLiteManager {
     // Migration 2 -> 3: Fix messages_fts schema (remove non-existent context column)
     if (currentVersion < 3) {
       try {
-        console.log(
+        console.error(
           "Applying migration v3: Fixing messages_fts schema..."
         );
 
@@ -344,9 +344,9 @@ export class SQLiteManager {
           this.db.exec(
             "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')"
           );
-          console.log("FTS index rebuilt successfully");
+          console.error("FTS index rebuilt successfully");
         } catch (ftsError) {
-          console.warn(
+          console.error(
             "FTS rebuild warning:",
             (ftsError as Error).message
           );
@@ -363,7 +363,7 @@ export class SQLiteManager {
             "Fix messages_fts schema - remove context column"
           );
 
-        console.log("Migration v3 applied successfully");
+        console.error("Migration v3 applied successfully");
       } catch (error) {
         console.error("Error applying migration v3:", error);
         throw error;

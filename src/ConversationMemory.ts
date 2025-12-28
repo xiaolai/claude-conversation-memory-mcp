@@ -126,7 +126,7 @@ export class ConversationMemory {
    * });
    *
    * if (result.embeddings_generated) {
-   *   console.log('Indexed folders:', result.indexed_folders);
+   *   console.error('Indexed folders:', result.indexed_folders);
    * } else {
    *   console.warn('Embeddings failed:', result.embedding_error);
    * }
@@ -138,12 +138,12 @@ export class ConversationMemory {
     indexed_folders?: string[];
     database_path?: string;
   }> {
-    console.log("\n=== Indexing Conversations ===");
-    console.log(`Project: ${options.projectPath}`);
+    console.error("\n=== Indexing Conversations ===");
+    console.error(`Project: ${options.projectPath}`);
     if (options.sessionId) {
-      console.log(`Session: ${options.sessionId} (single session mode)`);
+      console.error(`Session: ${options.sessionId} (single session mode)`);
     } else {
-      console.log(`Mode: All sessions`);
+      console.error(`Mode: All sessions`);
     }
 
     // Parse conversations
@@ -166,7 +166,7 @@ export class ConversationMemory {
     }
 
     // Extract decisions
-    console.log("\n=== Extracting Decisions ===");
+    console.error("\n=== Extracting Decisions ===");
     const decisions = this.decisionExtractor.extractDecisions(
       parseResult.messages,
       parseResult.thinking_blocks
@@ -174,7 +174,7 @@ export class ConversationMemory {
     await this.storage.storeDecisions(decisions);
 
     // Extract mistakes
-    console.log("\n=== Extracting Mistakes ===");
+    console.error("\n=== Extracting Mistakes ===");
     const mistakes = this.mistakeExtractor.extractMistakes(
       parseResult.messages,
       parseResult.tool_results
@@ -182,7 +182,7 @@ export class ConversationMemory {
     await this.storage.storeMistakes(mistakes);
 
     // Extract requirements and validations
-    console.log("\n=== Extracting Requirements ===");
+    console.error("\n=== Extracting Requirements ===");
     const requirements = this.requirementsExtractor.extractRequirements(
       parseResult.messages
     );
@@ -198,7 +198,7 @@ export class ConversationMemory {
     // Git integration
     if (options.enableGitIntegration !== false) {
       try {
-        console.log("\n=== Integrating Git History ===");
+        console.error("\n=== Integrating Git History ===");
         const gitIntegrator = new GitIntegrator(options.projectPath);
         const commits = await gitIntegrator.linkCommitsToConversations(
           parseResult.conversations,
@@ -206,7 +206,7 @@ export class ConversationMemory {
           decisions
         );
         await this.storage.storeGitCommits(commits);
-        console.log(`✓ Linked ${commits.length} git commits`);
+        console.error(`✓ Linked ${commits.length} git commits`);
       } catch (error) {
         console.error("⚠️ Git integration failed:", error);
         console.error("  Conversations will be indexed without git commit links");
@@ -215,12 +215,12 @@ export class ConversationMemory {
     }
 
     // Index for semantic search
-    console.log("\n=== Indexing for Semantic Search ===");
+    console.error("\n=== Indexing for Semantic Search ===");
     let embeddingError: string | undefined;
     try {
       await this.semanticSearch.indexMessages(parseResult.messages);
       await this.semanticSearch.indexDecisions(decisions);
-      console.log("✓ Semantic indexing complete");
+      console.error("✓ Semantic indexing complete");
     } catch (error) {
       embeddingError = (error as Error).message;
       console.error("⚠️ Semantic indexing failed:", error);
@@ -230,13 +230,13 @@ export class ConversationMemory {
     }
 
     // Print stats
-    console.log("\n=== Indexing Complete ===");
+    console.error("\n=== Indexing Complete ===");
     const stats = this.storage.getStats();
-    console.log(`Conversations: ${stats.conversations.count}`);
-    console.log(`Messages: ${stats.messages.count}`);
-    console.log(`Decisions: ${stats.decisions.count}`);
-    console.log(`Mistakes: ${stats.mistakes.count}`);
-    console.log(`Git Commits: ${stats.git_commits.count}`);
+    console.error(`Conversations: ${stats.conversations.count}`);
+    console.error(`Messages: ${stats.messages.count}`);
+    console.error(`Decisions: ${stats.decisions.count}`);
+    console.error(`Mistakes: ${stats.mistakes.count}`);
+    console.error(`Git Commits: ${stats.git_commits.count}`);
 
     // Return embedding status and indexing metadata
     return {
@@ -260,7 +260,7 @@ export class ConversationMemory {
    * ```typescript
    * const results = await memory.search('authentication bug fix', 5);
    * results.forEach(r => {
-   *   console.log(`${r.similarity}: ${r.snippet}`);
+   *   console.error(`${r.similarity}: ${r.snippet}`);
    * });
    * ```
    */
@@ -281,8 +281,8 @@ export class ConversationMemory {
    * ```typescript
    * const decisions = await memory.searchDecisions('database choice', 3);
    * decisions.forEach(d => {
-   *   console.log(`Decision: ${d.decision.decision_text}`);
-   *   console.log(`Rationale: ${d.decision.rationale}`);
+   *   console.error(`Decision: ${d.decision.decision_text}`);
+   *   console.error(`Rationale: ${d.decision.rationale}`);
    * });
    * ```
    */
@@ -301,7 +301,7 @@ export class ConversationMemory {
    * @example
    * ```typescript
    * const timeline = memory.getFileTimeline('src/index.ts');
-   * console.log(`${timeline.length} changes to this file`);
+   * console.error(`${timeline.length} changes to this file`);
    * ```
    */
   getFileTimeline(filePath: string) {
@@ -316,8 +316,8 @@ export class ConversationMemory {
    * @example
    * ```typescript
    * const stats = memory.getStats();
-   * console.log(`Indexed ${stats.conversations.count} conversations`);
-   * console.log(`Extracted ${stats.decisions.count} decisions`);
+   * console.error(`Indexed ${stats.conversations.count} conversations`);
+   * console.error(`Extracted ${stats.decisions.count} decisions`);
    * ```
    */
   getStats() {
@@ -411,7 +411,7 @@ export class ConversationMemory {
     }
 
     if (excludedMessageIds.size > 0) {
-      console.log(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
+      console.error(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
     }
 
     // Build set of remaining message IDs after filtering

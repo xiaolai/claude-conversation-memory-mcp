@@ -33,20 +33,20 @@ export class TransformersEmbeddings implements EmbeddingProvider {
       // Try to import @xenova/transformers
       const { pipeline } = await import("@xenova/transformers");
 
-      console.log(`Loading embedding model: ${this.model}...`);
+      console.error(`Loading embedding model: ${this.model}...`);
       this.pipeline = (await pipeline("feature-extraction", this.model)) as unknown as EmbeddingPipeline;
 
       this.available = true;
-      console.log(`✓ Transformers.js embeddings ready (${this.model})`);
+      console.error(`✓ Transformers.js embeddings ready (${this.model})`);
     } catch (error) {
       this.initializationError = error as Error;
       this.available = false;
 
       if ((error as Error).message.includes("Cannot find module")) {
-        console.warn("⚠️ @xenova/transformers not installed");
-        console.warn("   Install with: npm install @xenova/transformers");
+        console.error("⚠️ @xenova/transformers not installed");
+        console.error("   Install with: npm install @xenova/transformers");
       } else {
-        console.warn("⚠️ Could not load embedding model:", (error as Error).message);
+        console.error("⚠️ Could not load embedding model:", (error as Error).message);
       }
     }
   }
@@ -103,7 +103,7 @@ export class TransformersEmbeddings implements EmbeddingProvider {
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
 
-      console.log(
+      console.error(
         `Generating embeddings for batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(texts.length / batchSize)} (Transformers.js)`
       );
 

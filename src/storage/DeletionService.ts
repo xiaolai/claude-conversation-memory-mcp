@@ -218,7 +218,7 @@ export class DeletionService {
           }
         }
       } catch (error) {
-        console.warn("Semantic search failed, falling back to FTS:", (error as Error).message);
+        console.error("Semantic search failed, falling back to FTS:", (error as Error).message);
       }
     }
 
@@ -240,7 +240,7 @@ export class DeletionService {
         conversationIds.add(msg.conversation_id);
       }
     } catch (error) {
-      console.warn("FTS search failed:", (error as Error).message);
+      console.error("FTS search failed:", (error as Error).message);
     }
 
     return Array.from(conversationIds);

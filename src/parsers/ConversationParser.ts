@@ -19,9 +19,9 @@
  * ```typescript
  * const parser = new ConversationParser();
  * const result = parser.parseProject('/path/to/project');
- * console.log(`Parsed ${result.conversations.length} conversations`);
- * console.log(`Found ${result.messages.length} messages`);
- * console.log(`Extracted ${result.tool_uses.length} tool uses`);
+ * console.error(`Parsed ${result.conversations.length} conversations`);
+ * console.error(`Found ${result.messages.length} messages`);
+ * console.error(`Extracted ${result.tool_uses.length} tool uses`);
  * ```
  */
 
@@ -213,9 +213,9 @@ export class ConversationParser {
    * ```
    */
   parseProject(projectPath: string, sessionId?: string): ParseResult {
-    console.log(`Parsing conversations for project: ${projectPath}`);
+    console.error(`Parsing conversations for project: ${projectPath}`);
     if (sessionId) {
-      console.log(`Filtering for session: ${sessionId}`);
+      console.error(`Filtering for session: ${sessionId}`);
     }
 
     // Convert project path to Claude projects directory name
@@ -241,7 +241,7 @@ export class ConversationParser {
           const files = readdirSync(variantDir).filter(f => f.endsWith(".jsonl"));
           if (files.length > 0 && !dirsToCheck.includes(variantDir)) {
             dirsToCheck.push(variantDir);
-            console.log(`Found conversation directory: ${variant}`);
+            console.error(`Found conversation directory: ${variant}`);
           }
         } catch (_e) {
           // Directory exists but can't be read, skip it
@@ -250,13 +250,13 @@ export class ConversationParser {
     }
 
     if (dirsToCheck.length === 0) {
-      console.warn(`⚠️ No conversation directories found`);
-      console.warn(`  Checked ${checkedPaths.length} path variants:`);
+      console.error(`⚠️ No conversation directories found`);
+      console.error(`  Checked ${checkedPaths.length} path variants:`);
       for (const path of checkedPaths.slice(0, 5)) {
-        console.warn(`    - ${path}`);
+        console.error(`    - ${path}`);
       }
       if (checkedPaths.length > 5) {
-        console.warn(`    ... and ${checkedPaths.length - 5} more`);
+        console.error(`    ... and ${checkedPaths.length - 5} more`);
       }
       return {
         conversations: [],
@@ -269,7 +269,7 @@ export class ConversationParser {
       };
     }
 
-    console.log(`Looking in ${dirsToCheck.length} director(ies): ${dirsToCheck.join(", ")}`);
+    console.error(`Looking in ${dirsToCheck.length} director(ies): ${dirsToCheck.join(", ")}`);
 
     // Collect all .jsonl files from all directories
     const fileMap = new Map<string, string>(); // filename -> full path
@@ -291,12 +291,12 @@ export class ConversationParser {
     if (sessionId) {
       files = files.filter((f) => f === `${sessionId}.jsonl`);
       if (files.length === 0) {
-        console.warn(`⚠️ Session file not found: ${sessionId}.jsonl`);
-        console.warn(`Available sessions: ${Array.from(fileMap.keys()).join(", ")}`);
+        console.error(`⚠️ Session file not found: ${sessionId}.jsonl`);
+        console.error(`Available sessions: ${Array.from(fileMap.keys()).join(", ")}`);
       }
     }
 
-    console.log(`Found ${files.length} conversation file(s) to parse`);
+    console.error(`Found ${files.length} conversation file(s) to parse`);
 
     // Parse each file
     const result: ParseResult = {
@@ -316,7 +316,7 @@ export class ConversationParser {
       }
     }
 
-    console.log(
+    console.error(
       `Parsed ${result.conversations.length} conversations, ${result.messages.length} messages`
     );
 
@@ -359,13 +359,13 @@ export class ConversationParser {
     const projectPath = projectIdentifier || folderPath;
 
     if (!existsSync(folderPath)) {
-      console.warn(`⚠️ Folder does not exist: ${folderPath}`);
+      console.error(`⚠️ Folder does not exist: ${folderPath}`);
       return result;
     }
 
     // Get all .jsonl files in the folder
     const files = readdirSync(folderPath).filter((f) => f.endsWith(".jsonl"));
-    console.log(`Found ${files.length} conversation file(s) in ${folderPath}`);
+    console.error(`Found ${files.length} conversation file(s) in ${folderPath}`);
 
     // Parse each file, optionally skipping unchanged files in incremental mode
     let skippedCount = 0;
@@ -389,9 +389,9 @@ export class ConversationParser {
     }
 
     if (skippedCount > 0) {
-      console.log(`⏭ Skipped ${skippedCount} unchanged file(s)`);
+      console.error(`⏭ Skipped ${skippedCount} unchanged file(s)`);
     }
-    console.log(
+    console.error(
       `Parsed ${result.conversations.length} conversations, ${result.messages.length} messages`
     );
 

@@ -93,7 +93,7 @@ export class MigrationManager {
    * Apply a single migration
    */
   applyMigration(migration: Migration): void {
-    console.log(
+    console.error(
       `Applying migration v${migration.version}: ${migration.description}`
     );
 
@@ -122,7 +122,7 @@ export class MigrationManager {
         .run(migration.version, Date.now(), migration.description, checksum);
     });
 
-    console.log(`Migration v${migration.version} applied successfully`);
+    console.error(`Migration v${migration.version} applied successfully`);
   }
 
   /**
@@ -132,17 +132,17 @@ export class MigrationManager {
     const pending = this.getPendingMigrations();
 
     if (pending.length === 0) {
-      console.log("No pending migrations");
+      console.error("No pending migrations");
       return;
     }
 
-    console.log(`Found ${pending.length} pending migrations`);
+    console.error(`Found ${pending.length} pending migrations`);
 
     for (const migration of pending) {
       this.applyMigration(migration);
     }
 
-    console.log("All migrations applied successfully");
+    console.error("All migrations applied successfully");
   }
 
   /**
@@ -152,7 +152,7 @@ export class MigrationManager {
     const currentVersion = this.getCurrentVersion();
 
     if (targetVersion >= currentVersion) {
-      console.log("Nothing to rollback");
+      console.error("Nothing to rollback");
       return;
     }
 
@@ -168,7 +168,7 @@ export class MigrationManager {
         );
       }
 
-      console.log(`Rolling back migration v${migration.version}`);
+      console.error(`Rolling back migration v${migration.version}`);
 
       const downSql = migration.down;
       if (!downSql) {
@@ -185,7 +185,7 @@ export class MigrationManager {
           .run(migration.version);
       });
 
-      console.log(`Migration v${migration.version} rolled back`);
+      console.error(`Migration v${migration.version} rolled back`);
     }
   }
 

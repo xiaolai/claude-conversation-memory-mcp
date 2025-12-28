@@ -45,12 +45,12 @@ export class SemanticSearch {
    * @param incremental - If true, skip messages that already have embeddings (default: true for fast re-indexing)
    */
   async indexMessages(messages: Message[], incremental: boolean = true): Promise<void> {
-    console.log(`Indexing ${messages.length} messages...`);
+    console.error(`Indexing ${messages.length} messages...`);
 
     const embedder = await getEmbeddingGenerator();
 
     if (!embedder.isAvailable()) {
-      console.warn("Embeddings not available - skipping indexing");
+      console.error("Embeddings not available - skipping indexing");
       return;
     }
 
@@ -66,15 +66,15 @@ export class SemanticSearch {
       messagesToIndex = messagesWithContent.filter((m) => !existingIds.has(m.id));
 
       if (messagesToIndex.length === 0) {
-        console.log(`⏭ All ${messagesWithContent.length} messages already have embeddings`);
+        console.error(`⏭ All ${messagesWithContent.length} messages already have embeddings`);
         return;
       }
 
       if (existingIds.size > 0) {
-        console.log(`⏭ Skipping ${messagesWithContent.length - messagesToIndex.length} already-embedded messages`);
+        console.error(`⏭ Skipping ${messagesWithContent.length - messagesToIndex.length} already-embedded messages`);
       }
     }
-    console.log(`Generating embeddings for ${messagesToIndex.length} ${incremental ? "new " : ""}messages...`);
+    console.error(`Generating embeddings for ${messagesToIndex.length} ${incremental ? "new " : ""}messages...`);
 
     // Generate embeddings in batches
     const texts = messagesToIndex.map((m) => m.content);
@@ -89,7 +89,7 @@ export class SemanticSearch {
       );
     }
 
-    console.log("✓ Indexing complete");
+    console.error("✓ Indexing complete");
   }
 
   /**
@@ -98,12 +98,12 @@ export class SemanticSearch {
    * @param incremental - If true, skip decisions that already have embeddings (default: true for fast re-indexing)
    */
   async indexDecisions(decisions: Decision[], incremental: boolean = true): Promise<void> {
-    console.log(`Indexing ${decisions.length} decisions...`);
+    console.error(`Indexing ${decisions.length} decisions...`);
 
     const embedder = await getEmbeddingGenerator();
 
     if (!embedder.isAvailable()) {
-      console.warn("Embeddings not available - skipping decision indexing");
+      console.error("Embeddings not available - skipping decision indexing");
       return;
     }
 
@@ -114,15 +114,15 @@ export class SemanticSearch {
       decisionsToIndex = decisions.filter((d) => !existingIds.has(d.id));
 
       if (decisionsToIndex.length === 0) {
-        console.log(`⏭ All ${decisions.length} decisions already have embeddings`);
+        console.error(`⏭ All ${decisions.length} decisions already have embeddings`);
         return;
       }
 
       if (existingIds.size > 0) {
-        console.log(`⏭ Skipping ${decisions.length - decisionsToIndex.length} already-embedded decisions`);
+        console.error(`⏭ Skipping ${decisions.length - decisionsToIndex.length} already-embedded decisions`);
       }
     }
-    console.log(`Generating embeddings for ${decisionsToIndex.length} ${incremental ? "new " : ""}decisions...`);
+    console.error(`Generating embeddings for ${decisionsToIndex.length} ${incremental ? "new " : ""}decisions...`);
 
     // Generate embeddings for decision text + rationale
     const texts = decisionsToIndex.map((d) => {
@@ -142,7 +142,7 @@ export class SemanticSearch {
       );
     }
 
-    console.log("✓ Decision indexing complete");
+    console.error("✓ Decision indexing complete");
   }
 
   /**
@@ -156,7 +156,7 @@ export class SemanticSearch {
     const embedder = await getEmbeddingGenerator();
 
     if (!embedder.isAvailable()) {
-      console.warn("Embeddings not available - falling back to full-text search");
+      console.error("Embeddings not available - falling back to full-text search");
       return this.fallbackFullTextSearch(query, limit, filter);
     }
 
@@ -197,14 +197,14 @@ export class SemanticSearch {
 
       // Fall back to FTS if vector search returned no results
       if (enrichedResults.length === 0) {
-        console.warn("Vector search returned no results - falling back to FTS");
+        console.error("Vector search returned no results - falling back to FTS");
         return this.fallbackFullTextSearch(query, limit, filter);
       }
 
       return enrichedResults;
     } catch (error) {
       // If embedding fails, fall back to FTS
-      console.warn("Embedding error, falling back to FTS:", (error as Error).message);
+      console.error("Embedding error, falling back to FTS:", (error as Error).message);
       return this.fallbackFullTextSearch(query, limit, filter);
     }
   }
@@ -219,7 +219,7 @@ export class SemanticSearch {
     const embedder = await getEmbeddingGenerator();
 
     if (!embedder.isAvailable()) {
-      console.warn("Embeddings not available - using text search");
+      console.error("Embeddings not available - using text search");
       return this.fallbackDecisionSearch(query, limit);
     }
 
@@ -326,7 +326,7 @@ export class SemanticSearch {
     return rows.map((row) => {
       const conversation = this.getConversation(row.conversation_id);
       if (!conversation) {
-        console.warn(`Warning: Conversation ${row.conversation_id} not found for message ${row.id}`);
+        console.error(`Warning: Conversation ${row.conversation_id} not found for message ${row.id}`);
         // Return a placeholder - in production, this shouldn't happen
         throw new Error(`Data integrity error: Conversation ${row.conversation_id} not found`);
       }
@@ -370,7 +370,7 @@ export class SemanticSearch {
     return rows.map((row) => {
       const conversation = this.getConversation(row.conversation_id);
       if (!conversation) {
-        console.warn(`Warning: Conversation ${row.conversation_id} not found for decision ${row.id}`);
+        console.error(`Warning: Conversation ${row.conversation_id} not found for decision ${row.id}`);
         throw new Error(`Data integrity error: Conversation ${row.conversation_id} not found`);
       }
 
@@ -503,7 +503,7 @@ export class SemanticSearch {
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {
     // Guard against mismatched dimensions
     if (a.length !== b.length) {
-      console.warn(`Cosine similarity: dimension mismatch (${a.length} vs ${b.length})`);
+      console.error(`Cosine similarity: dimension mismatch (${a.length} vs ${b.length})`);
       return 0;
     }
 
@@ -531,7 +531,7 @@ export class SemanticSearch {
   private bufferToFloat32Array(buffer: Buffer): Float32Array {
     // Validate byte alignment (must be divisible by 4 for Float32)
     if (buffer.byteLength % 4 !== 0) {
-      console.warn(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
+      console.error(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
       return new Float32Array(0);
     }
 

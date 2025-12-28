@@ -26,7 +26,7 @@
  *   fileEdits,
  *   decisions
  * );
- * console.log(`Linked ${linkedCommits.filter(c => c.conversation_id).length} commits`);
+ * console.error(`Linked ${linkedCommits.filter(c => c.conversation_id).length} commits`);
  * ```
  */
 
@@ -118,7 +118,7 @@ export class GitIntegrator {
    *
    * // Find commits linked to a specific conversation
    * const convCommits = commits.filter(c => c.conversation_id === 'conv-123');
-   * console.log(`${convCommits.length} commits for this conversation`);
+   * console.error(`${convCommits.length} commits for this conversation`);
    * ```
    */
   async linkCommitsToConversations(
@@ -126,12 +126,12 @@ export class GitIntegrator {
     fileEdits: FileEdit[],
     decisions: Decision[]
   ): Promise<GitCommit[]> {
-    console.log("Parsing git history...");
+    console.error("Parsing git history...");
 
     // Get git log
     const commits = await this.parseGitHistory();
 
-    console.log(`Found ${commits.length} commits`);
+    console.error(`Found ${commits.length} commits`);
 
     // Link commits to conversations
     const linkedCommits: GitCommit[] = [];
@@ -146,16 +146,16 @@ export class GitIntegrator {
 
       if (linkage && linkage.confidence > 0.3) {
         commit.conversation_id = linkage.conversation.id;
-        console.log(
+        console.error(
           `Linked commit ${commit.hash.substring(0, 7)} to conversation (confidence: ${(linkage.confidence * 100).toFixed(0)}%)`
         );
-        console.log(`  Reasons: ${linkage.reasons.join(", ")}`);
+        console.error(`  Reasons: ${linkage.reasons.join(", ")}`);
       }
 
       linkedCommits.push(commit);
     }
 
-    console.log(
+    console.error(
       `Linked ${linkedCommits.filter((c) => c.conversation_id).length} commits to conversations`
     );
 

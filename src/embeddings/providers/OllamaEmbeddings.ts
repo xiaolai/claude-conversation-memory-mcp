@@ -42,20 +42,20 @@ export class OllamaEmbeddings implements EmbeddingProvider {
       const hasModel = data.models.some((m) => m.name.includes(this.model));
 
       if (!hasModel) {
-        console.warn(
+        console.error(
           `⚠️ Model '${this.model}' not found in Ollama. Available models: ${data.models.map((m) => m.name).join(", ")}`
         );
-        console.warn(`   Pull the model with: ollama pull ${this.model}`);
+        console.error(`   Pull the model with: ollama pull ${this.model}`);
         throw new Error(`Model ${this.model} not available in Ollama`);
       }
 
       this.available = true;
-      console.log(`✓ Ollama embeddings ready (${this.model})`);
+      console.error(`✓ Ollama embeddings ready (${this.model})`);
     } catch (error) {
       this.initializationError = error as Error;
       this.available = false;
-      console.warn("⚠️ Ollama not available:", (error as Error).message);
-      console.warn("   Make sure Ollama is running: ollama serve");
+      console.error("⚠️ Ollama not available:", (error as Error).message);
+      console.error("   Make sure Ollama is running: ollama serve");
     }
   }
 
@@ -114,7 +114,7 @@ export class OllamaEmbeddings implements EmbeddingProvider {
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
 
-      console.log(
+      console.error(
         `Generating embeddings for batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(texts.length / batchSize)} (Ollama)`
       );
 
@@ -152,7 +152,7 @@ export class OllamaEmbeddings implements EmbeddingProvider {
     }
 
     // Default to 768 if unknown (most common for Ollama models)
-    console.warn(
+    console.error(
       `Unknown model dimensions for '${model}', defaulting to 768. Specify dimensions in config if different.`
     );
     return 768;

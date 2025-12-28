@@ -112,7 +112,7 @@ export class ToolHandlers {
    *   enable_git: true,
    *   exclude_mcp_conversations: 'self-only'
    * });
-   * console.log(result.message); // "Indexed 5 conversation(s) with 245 messages..."
+   * console.error(result.message); // "Indexed 5 conversation(s) with 245 messages..."
    * ```
    */
   async indexConversations(args: Record<string, unknown>): Promise<Types.IndexConversationsResponse> {
@@ -152,8 +152,8 @@ export class ToolHandlers {
         ".claude-conversations-memory.db"
       );
 
-      console.log(`\n📂 Using project-specific database for: ${projectPath}`);
-      console.log(`   Database path: ${projectDbPath}`);
+      console.error(`\n📂 Using project-specific database for: ${projectPath}`);
+      console.error(`   Database path: ${projectDbPath}`);
 
       const projectDb = new SQLiteManager({ dbPath: projectDbPath });
 
@@ -205,11 +205,11 @@ export class ToolHandlers {
           const semanticSearch = new SemanticSearch(projectDb);
           await semanticSearch.indexMessages(parseResult.messages);
           await semanticSearch.indexDecisions(decisions);
-          console.log(`✓ Generated embeddings for project: ${projectPath}`);
+          console.error(`✓ Generated embeddings for project: ${projectPath}`);
         } catch (embedError) {
           embeddingError = (embedError as Error).message;
-          console.warn(`⚠️ Embedding generation failed:`, embeddingError);
-          console.warn("   FTS fallback will be used for search");
+          console.error(`⚠️ Embedding generation failed:`, embeddingError);
+          console.error("   FTS fallback will be used for search");
         }
 
         // Get stats
@@ -335,7 +335,7 @@ export class ToolHandlers {
     }
 
     if (excludedMessageIds.size > 0) {
-      console.log(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
+      console.error(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
     }
 
     const remainingMessageIds = new Set(
@@ -385,7 +385,7 @@ export class ToolHandlers {
    *   limit: 5
    * });
    * result.results.forEach(r => {
-   *   console.log(`${r.similarity.toFixed(2)}: ${r.snippet}`);
+   *   console.error(`${r.similarity.toFixed(2)}: ${r.snippet}`);
    * });
    * ```
    */
@@ -557,8 +557,8 @@ export class ToolHandlers {
    *   limit: 5
    * });
    * result.decisions.forEach(d => {
-   *   console.log(`Decision: ${d.decision_text}`);
-   *   console.log(`Rationale: ${d.rationale}`);
+   *   console.error(`Decision: ${d.decision_text}`);
+   *   console.error(`Rationale: ${d.rationale}`);
    * });
    * ```
    */
@@ -657,9 +657,9 @@ export class ToolHandlers {
    * const context = await handlers.checkBeforeModify({
    *   file_path: 'src/storage/SQLiteManager.ts'
    * });
-   * console.log(context.warning);
-   * console.log(`${context.related_decisions.length} decisions affect this file`);
-   * console.log(`${context.mistakes_to_avoid.length} mistakes to avoid`);
+   * console.error(context.warning);
+   * console.error(`${context.related_decisions.length} decisions affect this file`);
+   * console.error(`${context.mistakes_to_avoid.length} mistakes to avoid`);
    * ```
    */
   async checkBeforeModify(args: Record<string, unknown>): Promise<Types.CheckBeforeModifyResponse> {
@@ -731,9 +731,9 @@ export class ToolHandlers {
    *   include_decisions: true,
    *   include_commits: true
    * });
-   * console.log(`${evolution.total_edits} edits across ${evolution.timeline.length} events`);
+   * console.error(`${evolution.total_edits} edits across ${evolution.timeline.length} events`);
    * evolution.timeline.forEach(event => {
-   *   console.log(`${event.timestamp}: ${event.type}`);
+   *   console.error(`${event.timestamp}: ${event.type}`);
    * });
    * ```
    */
@@ -830,8 +830,8 @@ export class ToolHandlers {
    *   limit: 10
    * });
    * links.commits.forEach(c => {
-   *   console.log(`${c.hash}: ${c.message}`);
-   *   console.log(`  Conversation: ${c.conversation_id}`);
+   *   console.error(`${c.hash}: ${c.message}`);
+   *   console.error(`  Conversation: ${c.conversation_id}`);
    * });
    * ```
    */
@@ -921,8 +921,8 @@ export class ToolHandlers {
    *   limit: 5
    * });
    * mistakes.mistakes.forEach(m => {
-   *   console.log(`${m.mistake_type}: ${m.what_went_wrong}`);
-   *   console.log(`Fix: ${m.correction}`);
+   *   console.error(`${m.mistake_type}: ${m.what_went_wrong}`);
+   *   console.error(`Fix: ${m.correction}`);
    * });
    * ```
    */
@@ -1026,8 +1026,8 @@ export class ToolHandlers {
    *   type: 'security'
    * });
    * reqs.requirements.forEach(r => {
-   *   console.log(`${r.type}: ${r.description}`);
-   *   console.log(`Rationale: ${r.rationale}`);
+   *   console.error(`${r.type}: ${r.description}`);
+   *   console.error(`Rationale: ${r.rationale}`);
    * });
    * ```
    */
@@ -1279,9 +1279,9 @@ export class ToolHandlers {
    *   limit: 3
    * });
    * similar.sessions.forEach(s => {
-   *   console.log(`Session ${s.conversation_id} (${s.message_count} messages)`);
-   *   console.log(`Relevance: ${s.relevance_score.toFixed(2)}`);
-   *   console.log(`Messages: ${s.relevant_messages.length} relevant`);
+   *   console.error(`Session ${s.conversation_id} (${s.message_count} messages)`);
+   *   console.error(`Relevance: ${s.relevance_score.toFixed(2)}`);
+   *   console.error(`Messages: ${s.relevant_messages.length} relevant`);
    * });
    * ```
    */
@@ -1375,8 +1375,8 @@ export class ToolHandlers {
    *   file_path: 'src/database/pool.ts',
    *   limit: 5
    * });
-   * console.log(context.context_summary);
-   * context.application_suggestions.forEach(s => console.log(`- ${s}`));
+   * console.error(context.context_summary);
+   * context.application_suggestions.forEach(s => console.error(`- ${s}`));
    * ```
    */
   async recallAndApply(args: Record<string, unknown>): Promise<Types.RecallAndApplyResponse> {
@@ -1619,8 +1619,8 @@ export class ToolHandlers {
    *   scope: 'full',
    *   module_filter: 'src/auth'
    * });
-   * console.log(doc.documentation); // Markdown documentation
-   * console.log(`Documented ${doc.statistics.modules} modules`);
+   * console.error(doc.documentation); // Markdown documentation
+   * console.error(`Documented ${doc.statistics.modules} modules`);
    * ```
    */
   async generateDocumentation(args: Record<string, unknown>): Promise<Types.GenerateDocumentationResponse> {
@@ -1630,9 +1630,9 @@ export class ToolHandlers {
     const scope = typedArgs.scope || 'full';
     const moduleFilter = typedArgs.module_filter;
 
-    console.log('\n📚 Starting documentation generation...');
-    console.log(`Note: This tool requires CODE-GRAPH-RAG-MCP to be indexed first.`);
-    console.log(`Please ensure you have run code-graph-rag index on this project.`);
+    console.error('\n📚 Starting documentation generation...');
+    console.error(`Note: This tool requires CODE-GRAPH-RAG-MCP to be indexed first.`);
+    console.error(`Please ensure you have run code-graph-rag index on this project.`);
 
     // Note: In a real implementation, we would call CODE-GRAPH-RAG-MCP tools here
     // For now, we'll create a placeholder that shows the structure
@@ -1712,11 +1712,11 @@ export class ToolHandlers {
    * const discovery = await handlers.discoverOldConversations({
    *   current_project_path: '/Users/me/projects/my-app'
    * });
-   * console.log(discovery.message);
+   * console.error(discovery.message);
    * discovery.candidates.forEach(c => {
-   *   console.log(`Score ${c.score}: ${c.folder_name}`);
-   *   console.log(`  Original path: ${c.stored_project_path}`);
-   *   console.log(`  Stats: ${c.stats.conversations} conversations, ${c.stats.files} files`);
+   *   console.error(`Score ${c.score}: ${c.folder_name}`);
+   *   console.error(`  Original path: ${c.stored_project_path}`);
+   *   console.error(`  Stats: ${c.stats.conversations} conversations, ${c.stats.files} files`);
    * });
    * ```
    */
@@ -1796,7 +1796,7 @@ export class ToolHandlers {
    *   new_project_path: '/new/path/to/project',
    *   dry_run: true
    * });
-   * console.log(preview.message); // "Dry run: Would migrate X files..."
+   * console.error(preview.message); // "Dry run: Would migrate X files..."
    *
    * // Then, execute the migration
    * const result = await handlers.migrateProject({
@@ -1806,7 +1806,7 @@ export class ToolHandlers {
    *   dry_run: false,
    *   mode: 'migrate'
    * });
-   * console.log(`Migrated ${result.files_copied} files`);
+   * console.error(`Migrated ${result.files_copied} files`);
    * ```
    */
   async migrateProject(args: Record<string, unknown>): Promise<Types.MigrateProjectResponse> {
@@ -2098,10 +2098,10 @@ export class ToolHandlers {
             const semanticSearch = new SemanticSearch(codexDb);
             await semanticSearch.indexMessages(parseResult.messages, incremental);
             await semanticSearch.indexDecisions(decisions, incremental);
-            console.log(`✓ Generated embeddings for Codex project`);
+            console.error(`✓ Generated embeddings for Codex project`);
           } catch (embedError) {
-            console.warn("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
-            console.warn("   FTS fallback will be used for search");
+            console.error("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
+            console.error("   FTS fallback will be used for search");
           }
 
           // Get stats from the database
@@ -2232,10 +2232,10 @@ export class ToolHandlers {
                 const semanticSearch = new SemanticSearch(projectDb);
                 await semanticSearch.indexMessages(parseResult.messages, incremental);
                 await semanticSearch.indexDecisions(decisions, incremental);
-                console.log(`✓ Generated embeddings for project: ${folder}`);
+                console.error(`✓ Generated embeddings for project: ${folder}`);
               } catch (embedError) {
-                console.warn(`⚠️ Embedding generation failed for ${folder}:`, (embedError as Error).message);
-                console.warn("   FTS fallback will be used for search");
+                console.error(`⚠️ Embedding generation failed for ${folder}:`, (embedError as Error).message);
+                console.error("   FTS fallback will be used for search");
               }
 
               // Get stats from the database

@@ -145,11 +145,11 @@ export class BackupManager {
 
     writeFileSync(backupPath, JSON.stringify(fullBackup, null, 2), "utf-8");
 
-    console.log(`✓ Backup created: ${backupPath}`);
-    console.log(`  ${recordCounts.conversations} conversations`);
-    console.log(`  ${recordCounts.messages} messages`);
-    console.log(`  ${recordCounts.decisions} decisions`);
-    console.log(`  ${recordCounts.mistakes} mistakes`);
+    console.error(`✓ Backup created: ${backupPath}`);
+    console.error(`  ${recordCounts.conversations} conversations`);
+    console.error(`  ${recordCounts.messages} messages`);
+    console.error(`  ${recordCounts.decisions} decisions`);
+    console.error(`  ${recordCounts.mistakes} mistakes`);
 
     return metadata;
   }

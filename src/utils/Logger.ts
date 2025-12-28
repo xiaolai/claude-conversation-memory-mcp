@@ -66,19 +66,21 @@ export class Logger {
 
   /**
    * Debug level logging (most verbose)
+   * All logging goes to stderr to avoid interfering with MCP JSON-RPC on stdout
    */
   debug(message: string, ...args: unknown[]): void {
     if (this.config.level <= LogLevel.DEBUG) {
-      console.debug(this.format('DEBUG', message), ...args);
+      console.error(this.format('DEBUG', message), ...args);
     }
   }
 
   /**
    * Info level logging (normal operations)
+   * All logging goes to stderr to avoid interfering with MCP JSON-RPC on stdout
    */
   info(message: string, ...args: unknown[]): void {
     if (this.config.level <= LogLevel.INFO) {
-      console.log(this.format('INFO', message), ...args);
+      console.error(this.format('INFO', message), ...args);
     }
   }
 
@@ -87,7 +89,7 @@ export class Logger {
    */
   warn(message: string, ...args: unknown[]): void {
     if (this.config.level <= LogLevel.WARN) {
-      console.warn(this.format('WARN', message), ...args);
+      console.error(this.format('WARN', message), ...args);
     }
   }
 
@@ -102,10 +104,11 @@ export class Logger {
 
   /**
    * Success message (convenience wrapper for info)
+   * All logging goes to stderr to avoid interfering with MCP JSON-RPC on stdout
    */
   success(message: string, ...args: unknown[]): void {
     if (this.config.level <= LogLevel.INFO) {
-      console.log(this.format('✓', message), ...args);
+      console.error(this.format('✓', message), ...args);
     }
   }
 

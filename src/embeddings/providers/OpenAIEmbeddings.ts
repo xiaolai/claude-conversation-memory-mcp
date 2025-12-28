@@ -54,16 +54,16 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
       });
 
       this.available = true;
-      console.log(`✓ OpenAI embeddings ready (${this.model})`);
+      console.error(`✓ OpenAI embeddings ready (${this.model})`);
     } catch (error) {
       this.initializationError = error as Error;
       this.available = false;
 
       if ((error as Error).message.includes("Cannot find module")) {
-        console.warn("⚠️ OpenAI SDK not installed");
-        console.warn("   Install with: npm install openai");
+        console.error("⚠️ OpenAI SDK not installed");
+        console.error("   Install with: npm install openai");
       } else {
-        console.warn("⚠️ OpenAI initialization failed:", (error as Error).message);
+        console.error("⚠️ OpenAI initialization failed:", (error as Error).message);
       }
     }
   }
@@ -113,7 +113,7 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
 
-      console.log(
+      console.error(
         `Generating embeddings for batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(texts.length / batchSize)} (OpenAI)`
       );
 
