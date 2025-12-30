@@ -14,7 +14,6 @@ import { safeJsonParse } from "../utils/safeJson.js";
 export interface SearchFilter {
   date_range?: [number, number];
   message_type?: string[];
-  has_decisions?: boolean;
   conversation_id?: string;
 }
 
@@ -232,31 +231,102 @@ export class SemanticSearch {
     // Generate query embedding
     const queryEmbedding = await embedder.embed(query);
 
-    // Get all decision embeddings and calculate similarity
-    const allDecisions = this.db
-      .prepare(
-        "SELECT id, decision_id, embedding FROM decision_embeddings"
-      )
-      .all() as Array<{ id: string; decision_id: string; embedding: Buffer }>;
+    try {
+      // Use vec_distance_cosine for efficient ANN search with JOINs to avoid N+1 queries
+      const queryBuffer = Buffer.from(queryEmbedding.buffer);
 
-    const results = allDecisions
-      .map((row) => {
-        const embedding = this.bufferToFloat32Array(row.embedding);
-        const similarity = this.cosineSimilarity(queryEmbedding, embedding);
+      const rows = this.db
+        .prepare(
+          `SELECT
+            vec.id as vec_id,
+            vec_distance_cosine(vec.embedding, ?) as distance,
+            d.id,
+            d.conversation_id,
+            d.message_id,
+            d.decision_text,
+            d.rationale,
+            d.alternatives_considered,
+            d.rejected_reasons,
+            d.context,
+            d.related_files,
+            d.related_commits,
+            d.timestamp,
+            c.id as conv_id,
+            c.project_path,
+            c.first_message_at,
+            c.last_message_at,
+            c.message_count,
+            c.git_branch,
+            c.claude_version,
+            c.metadata as conv_metadata,
+            c.created_at as conv_created_at,
+            c.updated_at as conv_updated_at
+          FROM vec_decision_embeddings vec
+          JOIN decision_embeddings de ON vec.id = de.id
+          JOIN decisions d ON de.decision_id = d.id
+          JOIN conversations c ON d.conversation_id = c.id
+          ORDER BY distance
+          LIMIT ?`
+        )
+        .all(queryBuffer, limit) as Array<{
+        vec_id: string;
+        distance: number;
+        id: string;
+        conversation_id: string;
+        message_id: string;
+        decision_text: string;
+        rationale: string;
+        alternatives_considered: string;
+        rejected_reasons: string;
+        context: string;
+        related_files: string;
+        related_commits: string;
+        timestamp: number;
+        conv_id: string;
+        project_path: string;
+        first_message_at: number;
+        last_message_at: number;
+        message_count: number;
+        git_branch: string;
+        claude_version: string;
+        conv_metadata: string;
+        conv_created_at: number;
+        conv_updated_at: number;
+      }>;
 
-        const decision = this.getDecision(row.decision_id);
-        if (!decision) {return null;}
-
-        const conversation = this.getConversation(decision.conversation_id);
-        if (!conversation) {return null;}
-
-        return { decision, conversation, similarity };
-      })
-      .filter((r): r is DecisionSearchResult => r !== null)
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, limit);
-
-    return results;
+      return rows.map((row) => ({
+        decision: {
+          id: row.id,
+          conversation_id: row.conversation_id,
+          message_id: row.message_id,
+          decision_text: row.decision_text,
+          rationale: row.rationale,
+          alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+          rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+          context: row.context,
+          related_files: safeJsonParse<string[]>(row.related_files, []),
+          related_commits: safeJsonParse<string[]>(row.related_commits, []),
+          timestamp: row.timestamp,
+        },
+        conversation: {
+          id: row.conv_id,
+          project_path: row.project_path,
+          first_message_at: row.first_message_at,
+          last_message_at: row.last_message_at,
+          message_count: row.message_count,
+          git_branch: row.git_branch,
+          claude_version: row.claude_version,
+          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+          created_at: row.conv_created_at,
+          updated_at: row.conv_updated_at,
+        },
+        similarity: 1 - row.distance, // Convert distance to similarity
+      }));
+    } catch (error) {
+      // Fallback to text search if vec search fails (e.g., table doesn't exist)
+      console.error("Vec decision search failed, falling back to text search:", (error as Error).message);
+      return this.fallbackDecisionSearch(query, limit);
+    }
   }
 
   /**
@@ -295,8 +365,19 @@ export class SemanticSearch {
     // Sanitize the query for FTS5 syntax
     const ftsQuery = this.sanitizeFtsQuery(query);
 
+    // Select all needed conversation columns to avoid N+1 queries
     let sql = `
-      SELECT m.*, c.project_path, c.git_branch, c.claude_version
+      SELECT m.*,
+        c.id as conv_id,
+        c.project_path,
+        c.first_message_at,
+        c.last_message_at,
+        c.message_count as conv_message_count,
+        c.git_branch,
+        c.claude_version,
+        c.metadata as conv_metadata,
+        c.created_at as conv_created_at,
+        c.updated_at as conv_updated_at
       FROM messages m
       JOIN conversations c ON m.conversation_id = c.id
       WHERE m.id IN (
@@ -327,15 +408,35 @@ export class SemanticSearch {
     sql += " ORDER BY m.timestamp DESC LIMIT ?";
     params.push(limit);
 
-    const rows = this.db.prepare(sql).all(...params) as MessageRow[];
+    interface JoinedRow extends MessageRow {
+      conv_id: string;
+      project_path: string;
+      first_message_at: number;
+      last_message_at: number;
+      conv_message_count: number;
+      git_branch: string;
+      claude_version: string;
+      conv_metadata: string;
+      conv_created_at: number;
+      conv_updated_at: number;
+    }
+
+    const rows = this.db.prepare(sql).all(...params) as JoinedRow[];
 
     return rows.map((row) => {
-      const conversation = this.getConversation(row.conversation_id);
-      if (!conversation) {
-        console.error(`Warning: Conversation ${row.conversation_id} not found for message ${row.id}`);
-        // Return a placeholder - in production, this shouldn't happen
-        throw new Error(`Data integrity error: Conversation ${row.conversation_id} not found`);
-      }
+      // Build conversation from joined data - no separate query needed
+      const conversation = {
+        id: row.conv_id,
+        project_path: row.project_path,
+        first_message_at: row.first_message_at,
+        last_message_at: row.last_message_at,
+        message_count: row.conv_message_count,
+        git_branch: row.git_branch,
+        claude_version: row.claude_version,
+        metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+        created_at: row.conv_created_at,
+        updated_at: row.conv_updated_at,
+      };
 
       return {
         message: {
@@ -482,72 +583,6 @@ export class SemanticSearch {
       ...row,
       metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     };
-  }
-
-  /**
-   * Get decision by ID
-   */
-  private getDecision(id: string): Decision | null {
-    const row = this.db.prepare("SELECT * FROM decisions WHERE id = ?").get(id) as DecisionRow | undefined;
-
-    if (!row) {
-      return null;
-    }
-
-    return {
-      ...row,
-      alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
-      rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
-      related_files: safeJsonParse<string[]>(row.related_files, []),
-      related_commits: safeJsonParse<string[]>(row.related_commits, []),
-    };
-  }
-
-  /**
-   * Cosine similarity helper
-   */
-  private cosineSimilarity(a: Float32Array, b: Float32Array): number {
-    // Guard against mismatched dimensions
-    if (a.length !== b.length) {
-      console.error(`Cosine similarity: dimension mismatch (${a.length} vs ${b.length})`);
-      return 0;
-    }
-
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    // Guard against division by zero (zero vectors)
-    if (normA === 0 || normB === 0) {
-      return 0;
-    }
-
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
-
-  /**
-   * Buffer to Float32Array helper
-   */
-  private bufferToFloat32Array(buffer: Buffer): Float32Array {
-    // Validate byte alignment (must be divisible by 4 for Float32)
-    if (buffer.byteLength % 4 !== 0) {
-      console.error(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
-      return new Float32Array(0);
-    }
-
-    // Copy to ensure proper alignment (Node Buffers may not be aligned)
-    const aligned = new Float32Array(buffer.byteLength / 4);
-    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    for (let i = 0; i < aligned.length; i++) {
-      aligned[i] = view.getFloat32(i * 4, true); // little-endian
-    }
-    return aligned;
   }
 
   /**

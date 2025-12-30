@@ -72,32 +72,50 @@ export interface RegisterProjectOptions {
  * Maintains a central registry of all indexed projects in a global database.
  */
 export class GlobalIndex {
-  private db: Database.Database;
+  private db: Database.Database | null = null;
   private globalDbPath: string;
+  private initialized = false;
 
   constructor(customPath?: string) {
     // Use custom path or default to ~/.claude/.claude-global-index.db
+    // Note: Database is NOT opened here - lazy initialization in ensureInitialized()
     if (customPath) {
       this.globalDbPath = customPath;
     } else {
+      this.globalDbPath = join(homedir(), ".claude", ".claude-global-index.db");
+    }
+  }
+
+  /**
+   * Ensure database is initialized (lazy initialization).
+   * Called automatically by methods that need the database.
+   */
+  private ensureInitialized(): Database.Database {
+    if (!this.initialized || !this.db) {
+      // Create parent directory if needed
       const claudeHome = join(homedir(), ".claude");
       if (!existsSync(claudeHome)) {
         mkdirSync(claudeHome, { recursive: true });
       }
-      this.globalDbPath = join(claudeHome, ".claude-global-index.db");
+
+      // Open/create database
+      this.db = new Database(this.globalDbPath);
+
+      // Initialize schema
+      this.initializeSchema();
+      this.initialized = true;
     }
-
-    // Open/create database
-    this.db = new Database(this.globalDbPath);
-
-    // Initialize schema
-    this.initializeSchema();
+    return this.db;
   }
 
   /**
    * Initialize the global index database schema.
+   * Note: this.db is guaranteed to be set when this is called from ensureInitialized()
    */
   private initializeSchema(): void {
+    if (!this.db) {
+      throw new Error("Database not initialized");
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS project_metadata (
         id TEXT PRIMARY KEY,
@@ -127,16 +145,17 @@ export class GlobalIndex {
    * @returns The registered/updated project metadata
    */
   registerProject(options: RegisterProjectOptions): ProjectMetadata {
+    const db = this.ensureInitialized();
     const now = Date.now();
 
     // Check if project already exists
-    const existing = this.db
+    const existing = db
       .prepare("SELECT * FROM project_metadata WHERE project_path = ?")
       .get(options.project_path) as ProjectMetadata | undefined;
 
     if (existing) {
       // Update existing project
-      const stmt = this.db.prepare(`
+      const stmt = db.prepare(`
         UPDATE project_metadata
         SET source_type = ?,
             db_path = ?,
@@ -178,7 +197,7 @@ export class GlobalIndex {
     } else {
       // Insert new project
       const id = nanoid();
-      const stmt = this.db.prepare(`
+      const stmt = db.prepare(`
         INSERT INTO project_metadata (
           id, project_path, source_type, db_path, last_indexed,
           message_count, conversation_count, decision_count, mistake_count,
@@ -235,7 +254,8 @@ export class GlobalIndex {
 
     sql += " ORDER BY last_indexed DESC";
 
-    const rows = this.db.prepare(sql).all(...params) as Array<{
+    const db = this.ensureInitialized();
+    const rows = db.prepare(sql).all(...params) as Array<{
       id: string;
       project_path: string;
       source_type: "claude-code" | "codex";
@@ -263,7 +283,8 @@ export class GlobalIndex {
    * @returns Project metadata or null if not found
    */
   getProject(projectPath: string): ProjectMetadata | null {
-    const row = this.db
+    const db = this.ensureInitialized();
+    const row = db
       .prepare("SELECT * FROM project_metadata WHERE project_path = ?")
       .get(projectPath) as {
       id: string;
@@ -299,7 +320,8 @@ export class GlobalIndex {
    * @returns True if project was removed, false if not found
    */
   removeProject(projectPath: string): boolean {
-    const stmt = this.db.prepare("DELETE FROM project_metadata WHERE project_path = ?");
+    const db = this.ensureInitialized();
+    const stmt = db.prepare("DELETE FROM project_metadata WHERE project_path = ?");
     const result = stmt.run(projectPath);
     return result.changes > 0;
   }
@@ -318,7 +340,8 @@ export class GlobalIndex {
     total_decisions: number;
     total_mistakes: number;
   } {
-    const stats = this.db
+    const db = this.ensureInitialized();
+    const stats = db
       .prepare(
         `
       SELECT
@@ -349,7 +372,11 @@ export class GlobalIndex {
    * Close the global index database.
    */
   close(): void {
-    this.db.close();
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+      this.initialized = false;
+    }
   }
 
   /**

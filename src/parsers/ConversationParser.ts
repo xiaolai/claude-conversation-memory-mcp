@@ -234,7 +234,10 @@ export class ConversationParser {
 
     // Convert project path to Claude projects directory name
     const projectDirName = pathToProjectFolderName(projectPath);
-    const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+    const homeDir = process.env.HOME || process.env.USERPROFILE;
+    if (!homeDir) {
+      throw new Error("HOME or USERPROFILE environment variable is not set");
+    }
     const projectsBaseDir = join(homeDir, ".claude", "projects");
 
     // Generate path variants to handle Claude Code's potential encoding differences
@@ -482,10 +485,11 @@ export class ConversationParser {
       return;
     }
 
-    // Find timestamps
+    // Find timestamps (filter out invalid/NaN timestamps)
     const timestamps = messages
       .filter((m): m is typeof m & { timestamp: string } => !!m.timestamp)
       .map((m) => new Date(m.timestamp).getTime())
+      .filter((t) => !isNaN(t))
       .sort((a, b) => a - b);
 
     if (timestamps.length === 0) {

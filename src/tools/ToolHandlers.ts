@@ -167,7 +167,12 @@ export class ToolHandlers {
     // This is needed when indexing a different project than where the MCP server is running
     const currentDbPath = this.db.getDbPath();
     const targetProjectFolderName = pathToProjectFolderName(projectPath);
-    const isCurrentProject = currentDbPath.includes(targetProjectFolderName);
+    // Use exact path segment match to avoid false positives with substring matching
+    // e.g., "my-project" should not match "my-project-v2"
+    const isCurrentProject = currentDbPath.endsWith(`/${targetProjectFolderName}/`) ||
+                             currentDbPath.endsWith(`\\${targetProjectFolderName}\\`) ||
+                             currentDbPath.includes(`/${targetProjectFolderName}/`) ||
+                             currentDbPath.includes(`\\${targetProjectFolderName}\\`);
 
     let indexResult;
     let stats;
@@ -469,9 +474,9 @@ export class ToolHandlers {
               role: result.message.role,
             });
           }
-        } catch (_error) {
-          // Skip projects that fail to search (embedding errors, etc.)
-          // Continue to next project
+        } catch (error) {
+          // Track failed projects for debugging - don't silently ignore
+          console.error(`Search failed for project ${project.db_path}:`, (error as Error).message);
           continue;
         } finally {
           if (projectDb) {
@@ -1860,6 +1865,12 @@ export class ToolHandlers {
     const newProjectPath = typedArgs.new_project_path;
     const dryRun = typedArgs.dry_run ?? false;
     const mode = typedArgs.mode ?? "migrate";
+
+    // Validate paths are under expected directories
+    const projectsDir = this.migration.getProjectsDir();
+    if (!sourceFolder.startsWith(projectsDir)) {
+      throw new Error(`Source folder must be under ${projectsDir}`);
+    }
 
     // Calculate target folder path
     const targetFolderName = pathToProjectFolderName(newProjectPath);

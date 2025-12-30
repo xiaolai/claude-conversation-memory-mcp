@@ -35,12 +35,13 @@ describe('Logger', () => {
     console.debug = originalDebug;
   });
 
+  // Note: All logging goes to stderr (console.error) to avoid interfering with MCP JSON-RPC on stdout
   describe('Log Levels', () => {
     it('should log debug messages when level is DEBUG', () => {
       const logger = new Logger({ level: LogLevel.DEBUG });
       logger.debug('test debug');
 
-      expect(consoleDebugMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[DEBUG] test debug')
       );
     });
@@ -49,14 +50,16 @@ describe('Logger', () => {
       const logger = new Logger({ level: LogLevel.INFO });
       logger.debug('test debug');
 
-      expect(consoleDebugMock).not.toHaveBeenCalled();
+      expect(consoleErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining('[DEBUG]')
+      );
     });
 
     it('should log info messages when level is INFO', () => {
       const logger = new Logger({ level: LogLevel.INFO });
       logger.info('test info');
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[INFO] test info')
       );
     });
@@ -65,7 +68,7 @@ describe('Logger', () => {
       const logger = new Logger({ level: LogLevel.WARN });
       logger.warn('test warning');
 
-      expect(consoleWarnMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[WARN] test warning')
       );
     });
@@ -74,7 +77,9 @@ describe('Logger', () => {
       const logger = new Logger({ level: LogLevel.WARN });
       logger.info('test info');
 
-      expect(consoleLogMock).not.toHaveBeenCalled();
+      expect(consoleErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining('[INFO]')
+      );
     });
 
     it('should log errors when level is ERROR', () => {
@@ -93,9 +98,6 @@ describe('Logger', () => {
       logger.warn('warn');
       logger.error('error');
 
-      expect(consoleDebugMock).not.toHaveBeenCalled();
-      expect(consoleLogMock).not.toHaveBeenCalled();
-      expect(consoleWarnMock).not.toHaveBeenCalled();
       expect(consoleErrorMock).not.toHaveBeenCalled();
     });
   });
@@ -105,7 +107,7 @@ describe('Logger', () => {
       const logger = new Logger({ prefix: 'TestModule', level: LogLevel.INFO });
       logger.info('test message');
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[TestModule]')
       );
     });
@@ -114,7 +116,7 @@ describe('Logger', () => {
       const logger = new Logger({ timestamp: true, level: LogLevel.INFO });
       logger.info('test message');
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/)
       );
     });
@@ -127,7 +129,7 @@ describe('Logger', () => {
       });
       logger.info('message');
 
-      const call = consoleLogMock.mock.calls[0][0] as string;
+      const call = consoleErrorMock.mock.calls[0][0] as string;
       expect(call).toMatch(/^\d{4}/); // Timestamp
       expect(call).toContain('[Test]'); // Prefix
       expect(call).toContain('[INFO]'); // Level
@@ -142,7 +144,7 @@ describe('Logger', () => {
 
       child.info('test');
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[Parent:Child]')
       );
     });
@@ -154,8 +156,10 @@ describe('Logger', () => {
       child.info('should not log');
       child.error('should log');
 
-      expect(consoleLogMock).not.toHaveBeenCalled();
-      expect(consoleErrorMock).toHaveBeenCalled();
+      // Both info and error go to stderr, but info shouldn't log when level is ERROR
+      const calls = consoleErrorMock.mock.calls.map(c => c[0] as string);
+      expect(calls.some(c => c.includes('[INFO]'))).toBe(false);
+      expect(calls.some(c => c.includes('[ERROR]'))).toBe(true);
     });
   });
 
@@ -164,11 +168,14 @@ describe('Logger', () => {
       const logger = new Logger({ level: LogLevel.ERROR });
 
       logger.info('not logged');
-      expect(consoleLogMock).not.toHaveBeenCalled();
+      // Initially should not have [INFO] calls
+      let calls = consoleErrorMock.mock.calls.map(c => c[0] as string);
+      expect(calls.some(c => c.includes('[INFO]'))).toBe(false);
 
       logger.setLevel(LogLevel.INFO);
       logger.info('now logged');
-      expect(consoleLogMock).toHaveBeenCalled();
+      calls = consoleErrorMock.mock.calls.map(c => c[0] as string);
+      expect(calls.some(c => c.includes('[INFO]'))).toBe(true);
     });
 
     it('should return current log level', () => {
@@ -185,7 +192,7 @@ describe('Logger', () => {
       const logger = new Logger({ level: LogLevel.INFO });
       logger.success('operation complete');
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[✓] operation complete')
       );
     });
@@ -194,7 +201,9 @@ describe('Logger', () => {
       const logger = new Logger({ level: LogLevel.WARN });
       logger.success('operation complete');
 
-      expect(consoleLogMock).not.toHaveBeenCalled();
+      // Success uses INFO level, so it shouldn't log when level is WARN
+      const calls = consoleErrorMock.mock.calls.map(c => c[0] as string);
+      expect(calls.some(c => c.includes('[✓]'))).toBe(false);
     });
   });
 
@@ -204,7 +213,7 @@ describe('Logger', () => {
       const obj = { foo: 'bar' };
       logger.info('message', obj, 123);
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.any(String),
         obj,
         123
@@ -217,7 +226,7 @@ describe('Logger', () => {
       const logger = createLogger('MyModule');
       logger.info('test');
 
-      expect(consoleLogMock).toHaveBeenCalledWith(
+      expect(consoleErrorMock).toHaveBeenCalledWith(
         expect.stringContaining('[MyModule]')
       );
     });

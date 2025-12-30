@@ -98,6 +98,7 @@ async function main() {
 
 // Run main
 main().catch((error) => {
-  console.error("Fatal error:", error);
+  const isDebug = process.env.LOG_LEVEL?.toUpperCase() === "DEBUG";
+  console.error("Fatal error:", isDebug ? error : (error as Error).message);
   process.exit(1);
 });

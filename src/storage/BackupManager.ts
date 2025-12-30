@@ -266,7 +266,7 @@ export class BackupManager {
       return [];
     }
     const placeholders = messageIds.map(() => "?").join(",");
-    // Note: BLOB data will be base64 encoded in JSON
+    // Note: Only metadata is exported, not the actual embedding BLOBs (too large for JSON)
     return this.db
       .prepare(`SELECT id, message_id, model_name, dimensions, created_at FROM message_embeddings WHERE message_id IN (${placeholders})`)
       .all(...messageIds);
