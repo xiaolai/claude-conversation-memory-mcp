@@ -69,6 +69,8 @@ const DEFAULT_SIMILARITY_SCORE = 1.0;
  */
 export class ToolHandlers {
   private migration: ProjectMigration;
+  private lastAutoIndex: number = 0;
+  private readonly AUTO_INDEX_COOLDOWN = 60000; // 1 minute
 
   /**
    * Create a new ToolHandlers instance.
@@ -79,6 +81,24 @@ export class ToolHandlers {
    */
   constructor(private memory: ConversationMemory, private db: SQLiteManager, projectsDir?: string) {
     this.migration = new ProjectMigration(db, projectsDir);
+  }
+
+  /**
+   * Automatically run incremental indexing if cooldown has expired.
+   * This ensures search results include recent conversations without
+   * requiring manual indexing.
+   */
+  private async maybeAutoIndex(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastAutoIndex > this.AUTO_INDEX_COOLDOWN) {
+      try {
+        await this.indexAllProjects({ incremental: true });
+        this.lastAutoIndex = now;
+      } catch (error) {
+        // Log but don't fail - search should still work with existing index
+        console.error('Auto-indexing failed:', error);
+      }
+    }
   }
 
   /**
@@ -390,6 +410,7 @@ export class ToolHandlers {
    * ```
    */
   async searchConversations(args: Record<string, unknown>): Promise<Types.SearchConversationsResponse> {
+    await this.maybeAutoIndex();
     const typedArgs = args as unknown as Types.SearchConversationsArgs;
     const { query, limit = 10, offset = 0, date_range, scope = 'all', conversation_id } = typedArgs;
 
@@ -563,6 +584,7 @@ export class ToolHandlers {
    * ```
    */
   async getDecisions(args: Record<string, unknown>): Promise<Types.GetDecisionsResponse> {
+    await this.maybeAutoIndex();
     const typedArgs = args as unknown as Types.GetDecisionsArgs;
     const { query, file_path, limit = 10, offset = 0, scope = 'all', conversation_id } = typedArgs;
 
@@ -927,6 +949,7 @@ export class ToolHandlers {
    * ```
    */
   async searchMistakes(args: Record<string, unknown>): Promise<Types.SearchMistakesResponse> {
+    await this.maybeAutoIndex();
     const typedArgs = args as unknown as Types.SearchMistakesArgs;
     const { query, mistake_type, limit = 10, offset = 0, scope = 'all', conversation_id } = typedArgs;
 
@@ -1286,6 +1309,7 @@ export class ToolHandlers {
    * ```
    */
   async findSimilarSessions(args: Record<string, unknown>): Promise<Types.FindSimilarSessionsResponse> {
+    await this.maybeAutoIndex();
     const typedArgs = args as unknown as Types.FindSimilarSessionsArgs;
     const { query, limit = 5, offset = 0, scope = 'all', conversation_id: _conversation_id } = typedArgs;
 
@@ -1380,6 +1404,7 @@ export class ToolHandlers {
    * ```
    */
   async recallAndApply(args: Record<string, unknown>): Promise<Types.RecallAndApplyResponse> {
+    await this.maybeAutoIndex();
     const typedArgs = args as unknown as Types.RecallAndApplyArgs;
     const { query, context_types = ["conversations", "decisions", "mistakes", "file_changes", "commits"], file_path, date_range, limit = 5, offset = 0, scope = 'all', conversation_id } = typedArgs;
 
@@ -2326,6 +2351,7 @@ export class ToolHandlers {
   async searchAllConversations(
     args: Record<string, unknown>
   ): Promise<Types.SearchAllConversationsResponse> {
+    await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const { SemanticSearch } = await import("../search/SemanticSearch.js");
@@ -2423,6 +2449,7 @@ export class ToolHandlers {
    * @returns Decisions from all projects
    */
   async getAllDecisions(args: Record<string, unknown>): Promise<Types.GetAllDecisionsResponse> {
+    await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const typedArgs = args as unknown as Types.GetAllDecisionsArgs;
@@ -2510,6 +2537,7 @@ export class ToolHandlers {
   async searchAllMistakes(
     args: Record<string, unknown>
   ): Promise<Types.SearchAllMistakesResponse> {
+    await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const typedArgs = args as unknown as Types.SearchAllMistakesArgs;
