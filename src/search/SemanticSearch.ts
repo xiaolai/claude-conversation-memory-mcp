@@ -151,6 +151,62 @@ export class SemanticSearch {
   }
 
   /**
+   * Index all decisions in the database that don't have embeddings.
+   * This catches decisions that were stored before embeddings were available.
+   */
+  async indexMissingDecisionEmbeddings(): Promise<number> {
+    const embedder = await getEmbeddingGenerator();
+
+    if (!embedder.isAvailable()) {
+      console.error("Embeddings not available - skipping missing decision indexing");
+      return 0;
+    }
+
+    // Get decisions without embeddings
+    const existingIds = this.vectorStore.getExistingDecisionEmbeddingIds();
+
+    interface DecisionRow {
+      id: string;
+      decision_text: string;
+      rationale: string | null;
+      context: string | null;
+    }
+
+    const allDecisions = this.db
+      .prepare("SELECT id, decision_text, rationale, context FROM decisions")
+      .all() as DecisionRow[];
+
+    const missingDecisions = allDecisions.filter((d) => !existingIds.has(d.id));
+
+    if (missingDecisions.length === 0) {
+      return 0;
+    }
+
+    console.error(`Generating embeddings for ${missingDecisions.length} decisions missing embeddings...`);
+
+    // Generate embeddings for decision text + rationale
+    const texts = missingDecisions.map((d) => {
+      const parts = [d.decision_text];
+      if (d.rationale) {parts.push(d.rationale);}
+      if (d.context) {parts.push(d.context);}
+      return parts.join(" ");
+    });
+
+    const embeddings = await embedder.embedBatch(texts, 32);
+
+    // Store embeddings
+    for (let i = 0; i < missingDecisions.length; i++) {
+      await this.vectorStore.storeDecisionEmbedding(
+        missingDecisions[i].id,
+        embeddings[i]
+      );
+    }
+
+    console.error(`✓ Generated ${missingDecisions.length} missing decision embeddings`);
+    return missingDecisions.length;
+  }
+
+  /**
    * Search conversations using natural language query
    */
   async searchConversations(

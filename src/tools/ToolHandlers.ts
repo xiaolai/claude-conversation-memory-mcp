@@ -249,6 +249,9 @@ export class ToolHandlers {
           const semanticSearch = new SemanticSearch(projectDb);
           await semanticSearch.indexMessages(parseResult.messages);
           await semanticSearch.indexDecisions(decisions);
+          // Also index any decisions in DB that are missing embeddings
+          // (catches decisions created before embeddings were available)
+          await semanticSearch.indexMissingDecisionEmbeddings();
           console.error(`✓ Generated embeddings for project: ${projectPath}`);
         } catch (embedError) {
           embeddingError = (embedError as Error).message;
