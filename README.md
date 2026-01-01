@@ -150,6 +150,8 @@ Set `OPENAI_API_KEY` environment variable.
 |------|-------------|
 | `check_before_modify` | Get context before editing a file |
 | `get_file_evolution` | See file history with commits |
+| `search_by_file` | Find all context related to a file |
+| `list_recent_sessions` | List recent sessions with summaries |
 | `recall_and_apply` | Recall past work for current task |
 | `get_requirements` | Look up component requirements |
 | `get_tool_history` | Query tool usage history |

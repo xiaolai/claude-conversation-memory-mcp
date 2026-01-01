@@ -62,22 +62,48 @@ export interface Decision {
  * decisions, rationale, alternatives, and context.
  */
 export class DecisionExtractor {
-  // Decision pattern indicators
-  private readonly DECISION_PATTERNS = [
-    /(?:we|i|let's)\s+(?:decided|choose|chose|went with|picked|selected)\s+(?:to\s+)?(.+?(?:because|since|as|for|due to))/gi,
-    /(?:using|use|implement|go with|adopt)\s+(.+?)\s+(?:instead of|over|rather than)\s+(.+?)\s+(?:because|since|as)/gi,
-    /(?:decision|chose|selected|picked):\s*(.+?)(?:\.|$)/gi,
-    /(?:rationale|reason|why):\s*(.+?)(?:\.|$)/gi,
-    /(?:rejected|dismissed|avoided|didn't use)\s+(.+?)\s+(?:because|due to|since)/gi,
+  // Minimum quality score required to store a decision
+  private readonly MIN_QUALITY_SCORE = 2;
+
+  // Patterns that indicate noise/garbage to filter out
+  private readonly NOISE_PATTERNS = [
+    /this session is being continued/i,
+    /conversation is summarized below/i,
+    /previous conversation that ran out of context/i,
+    /here is the summary/i,
+    /summary of the conversation/i,
+    /context from previous session/i,
+    /let me summarize/i,
+    /to summarize what we've done/i,
+    /^I'll help you/i,
+    /^Let me help you/i,
+    /^Sure,? I can/i,
+    /^I understand/i,
+    /^Great question/i,
   ];
 
-  // Correction patterns (user correcting assistant)
+  // Decision pattern indicators - more focused on technical decisions
+  private readonly DECISION_PATTERNS = [
+    // Technical decision with comparison and rationale
+    /(?:using|use|implement|adopt)\s+(.+?)\s+(?:instead of|over|rather than)\s+(.+?)\s+(?:because|since|as|for)\s+(.+?)(?:\.|$)/gi,
+    // Explicit architectural decision
+    /(?:architectural|technical|design)\s+decision:\s*(.+?)(?:\.|$)/gi,
+    // We decided with clear rationale
+    /(?:we|i)\s+(?:decided|chose)\s+(?:to\s+)?(.+?)\s+(?:because|since|due to|for)\s+(.+?)(?:\.|$)/gi,
+    // Rejected alternative with reason
+    /(?:rejected|dismissed|avoided|ruled out)\s+(.+?)\s+(?:because|due to|since|as)\s+(.+?)(?:\.|$)/gi,
+  ];
+
+  // Correction patterns - stricter, require technical context
   private readonly CORRECTION_PATTERNS = [
-    /^no[,\s]+/i,
-    /that'?s?\s+(?:wrong|incorrect|not right)/i,
-    /actually[,\s]+/i,
-    /instead[,\s]+(?:we should|you should|do)/i,
-    /don't\s+(?:do that|use that)/i,
+    // "No, use X instead of Y"
+    /^no[,\s]+(?:use|implement|go with)\s+(.+?)\s+(?:instead|rather)/i,
+    // "Actually, we should use X because Y"
+    /^actually[,\s]+(?:we should|you should|use|implement)\s+(.+?)\s+(?:because|since)/i,
+    // "That's wrong, the correct approach is X"
+    /that'?s?\s+(?:wrong|incorrect)[,\s]+(?:the correct|use|we should)\s+(.+)/i,
+    // "Don't use X, use Y instead"
+    /don't\s+(?:use|implement)\s+(.+?)[,\s]+(?:use|implement)\s+(.+)/i,
   ];
 
   // Context keywords to identify what the decision is about
@@ -128,6 +154,11 @@ export class DecisionExtractor {
     // Extract from assistant messages with thinking blocks
     for (const message of messages) {
       if (message.role === "assistant" && message.content) {
+        // Skip messages that are noise (session summaries, etc.)
+        if (this.isNoiseContent(message.content)) {
+          continue;
+        }
+
         const thinking = thinkingBlocks.find((t) => t.message_id === message.id);
 
         // Check for explicit decisions in message content
@@ -137,13 +168,30 @@ export class DecisionExtractor {
 
       // Extract from user corrections
       if (message.role === "user" && message.content) {
+        // Skip noise content
+        if (this.isNoiseContent(message.content)) {
+          continue;
+        }
         const corrections = this.extractCorrections(message);
         decisions.push(...corrections);
       }
     }
 
     // Deduplicate similar decisions
-    return this.deduplicateDecisions(decisions);
+    const deduplicated = this.deduplicateDecisions(decisions);
+
+    // Filter by quality score
+    return deduplicated.filter(
+      (d) => this.scoreDecisionImportance(d) >= this.MIN_QUALITY_SCORE
+    );
+  }
+
+  /**
+   * Check if content is noise that should be filtered out
+   */
+  private isNoiseContent(content: string): boolean {
+    const firstChunk = content.substring(0, 500);
+    return this.NOISE_PATTERNS.some((pattern) => pattern.test(firstChunk));
   }
 
   /**
@@ -266,32 +314,75 @@ export class DecisionExtractor {
    */
   private extractCorrections(message: Message): Decision[] {
     const content = message.content || "";
+    const decisions: Decision[] = [];
 
-    // Check if this is a correction
-    const isCorrection = this.CORRECTION_PATTERNS.some((pattern) =>
-      pattern.test(content)
-    );
+    // Check each correction pattern and extract structured data
+    for (const pattern of this.CORRECTION_PATTERNS) {
+      const match = content.match(pattern);
+      if (match) {
+        // Extract the decision from the capture groups
+        const decisionText = match[1]?.trim() || match[0];
+        const alternative = match[2]?.trim();
 
-    if (!isCorrection) {return [];}
+        // Must have technical context to be a valid correction
+        const context = this.identifyContext(content);
+        if (!context && !this.hasTechnicalKeywords(content)) {
+          continue;
+        }
 
-    // Extract what the correction is about
-    const correctionText = content.replace(/^(no[,\s]+|actually[,\s]+)/i, "").trim();
+        decisions.push({
+          id: nanoid(),
+          conversation_id: message.conversation_id,
+          message_id: message.id,
+          decision_text: alternative
+            ? `Use ${alternative} instead of ${decisionText}`
+            : decisionText,
+          rationale: "User correction - previous approach was incorrect",
+          alternatives_considered: alternative ? [decisionText] : [],
+          rejected_reasons: alternative
+            ? { [decisionText]: "user rejected" }
+            : { "previous approach": "user rejected" },
+          context,
+          related_files: this.extractRelatedFiles(message),
+          related_commits: [],
+          timestamp: message.timestamp,
+        });
+        break; // Only extract one correction per message
+      }
+    }
 
-    return [
-      {
-        id: nanoid(),
-        conversation_id: message.conversation_id,
-        message_id: message.id,
-        decision_text: correctionText,
-        rationale: "User correction - previous approach was incorrect",
-        alternatives_considered: [],
-        rejected_reasons: { "previous approach": "user rejected" },
-        context: this.identifyContext(content),
-        related_files: this.extractRelatedFiles(message),
-        related_commits: [],
-        timestamp: message.timestamp,
-      },
+    return decisions;
+  }
+
+  /**
+   * Check if content contains technical keywords suggesting a real decision
+   */
+  private hasTechnicalKeywords(content: string): boolean {
+    const technicalKeywords = [
+      "function",
+      "class",
+      "method",
+      "variable",
+      "import",
+      "export",
+      "component",
+      "module",
+      "package",
+      "library",
+      "framework",
+      "database",
+      "query",
+      "api",
+      "endpoint",
+      "route",
+      "config",
+      "setting",
+      "type",
+      "interface",
+      "schema",
     ];
+    const lowerContent = content.toLowerCase();
+    return technicalKeywords.some((kw) => lowerContent.includes(kw));
   }
 
   /**
@@ -407,11 +498,10 @@ export class DecisionExtractor {
     const seen = new Set<string>();
 
     for (const decision of decisions) {
-      // Create a signature for the decision
-      const signature = `${decision.decision_text.toLowerCase()}_${decision.timestamp}`.substring(
-        0,
-        100
-      );
+      // Create a signature including message_id to avoid collisions
+      // between different decisions with similar text in the same conversation
+      const textPrefix = decision.decision_text.toLowerCase().substring(0, 100);
+      const signature = `${decision.message_id}_${textPrefix}_${decision.timestamp}`;
 
       if (!seen.has(signature)) {
         seen.add(signature);

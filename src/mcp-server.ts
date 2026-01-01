@@ -73,6 +73,8 @@ export class ConversationMemoryServer {
       discover_old_conversations: (args) => this.handlers.discoverOldConversations(args),
       migrate_project: (args) => this.handlers.migrateProject(args),
       forget_by_topic: (args) => this.handlers.forgetByTopic(args),
+      search_by_file: (args) => this.handlers.searchByFile(args),
+      list_recent_sessions: (args) => this.handlers.listRecentSessions(args),
       index_all_projects: (args) => this.handlers.indexAllProjects(args),
       search_all_conversations: (args) => this.handlers.searchAllConversations(args),
       get_all_decisions: (args) => this.handlers.getAllDecisions(args),
@@ -102,8 +104,8 @@ export class ConversationMemoryServer {
       try {
         console.error(`[MCP] Executing tool: ${name}`);
 
-        const handler = toolHandlers[name];
-        if (!handler) {
+        // Guard against prototype pollution: only allow own properties
+        if (!Object.hasOwn(toolHandlers, name)) {
           return {
             content: [
               {
@@ -115,6 +117,7 @@ export class ConversationMemoryServer {
           };
         }
 
+        const handler = toolHandlers[name];
         const result = await handler(argsObj);
 
         // Use compact JSON for responses (no pretty-printing)

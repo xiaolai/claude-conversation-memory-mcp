@@ -32,7 +32,7 @@ import { ProjectMigration } from "../utils/ProjectMigration.js";
 import { pathToProjectFolderName } from "../utils/sanitization.js";
 import { DeletionService } from "../storage/DeletionService.js";
 import { readdirSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { safeJsonParse } from "../utils/safeJson.js";
 
 /**
@@ -1086,7 +1086,8 @@ export class ToolHandlers {
     const { component, type } = typedArgs;
 
     const sanitized = sanitizeForLike(component);
-    let sql = "SELECT * FROM requirements WHERE description LIKE ? ESCAPE '\\' OR affects_components LIKE ? ESCAPE '\\'";
+    // Wrap OR group in parentheses to ensure AND type=? applies to both conditions
+    let sql = "SELECT * FROM requirements WHERE (description LIKE ? ESCAPE '\\' OR affects_components LIKE ? ESCAPE '\\')";
     const params: (string | number)[] = [`%${sanitized}%`, `%${sanitized}%`];
 
     if (type) {
@@ -1523,16 +1524,17 @@ export class ToolHandlers {
 
     // 4. Recall file changes if requested
     if (context_types.includes("file_changes") && file_path) {
+      // Query file_edits table (not messages) - file_path is stored in file_edits
       const fileChanges = this.db.getDatabase()
         .prepare(`
           SELECT
             file_path,
             COUNT(DISTINCT conversation_id) as change_count,
-            MAX(timestamp) as last_modified,
+            MAX(snapshot_timestamp) as last_modified,
             GROUP_CONCAT(DISTINCT conversation_id) as conversation_ids
-          FROM messages
-          WHERE file_path LIKE ?
-          ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
+          FROM file_edits
+          WHERE file_path LIKE ? ESCAPE '\\'
+          ${date_range ? 'AND snapshot_timestamp BETWEEN ? AND ?' : ''}
           GROUP BY file_path
           ORDER BY last_modified DESC
           LIMIT ?
@@ -1552,7 +1554,7 @@ export class ToolHandlers {
         file_path: fc.file_path,
         change_count: fc.change_count,
         last_modified: new Date(fc.last_modified).toISOString(),
-        related_conversations: fc.conversation_ids.split(','),
+        related_conversations: fc.conversation_ids ? fc.conversation_ids.split(',') : [],
       }));
       totalItems += recalled.file_changes.length;
 
@@ -1869,9 +1871,11 @@ export class ToolHandlers {
     const dryRun = typedArgs.dry_run ?? false;
     const mode = typedArgs.mode ?? "migrate";
 
-    // Validate paths are under expected directories
-    const projectsDir = this.migration.getProjectsDir();
-    if (!sourceFolder.startsWith(projectsDir)) {
+    // Validate paths are under expected directories using resolved paths
+    // to prevent path traversal attacks (e.g., /projects/../../../etc/passwd)
+    const projectsDir = resolve(this.migration.getProjectsDir());
+    const resolvedSource = resolve(sourceFolder);
+    if (!resolvedSource.startsWith(projectsDir + "/") && resolvedSource !== projectsDir) {
       throw new Error(`Source folder must be under ${projectsDir}`);
     }
 
@@ -1953,7 +1957,10 @@ export class ToolHandlers {
    */
   async forgetByTopic(args: unknown): Promise<Types.ForgetByTopicResponse> {
     const typedArgs = args as Types.ForgetByTopicArgs;
-    const keywords = typedArgs.keywords || [];
+    // Filter out empty strings and trim whitespace
+    const keywords = (typedArgs.keywords || [])
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
     const projectPath = typedArgs.project_path || process.cwd();
     // SECURITY: Require strict boolean true to prevent truthy string coercion
     const confirm = typedArgs.confirm === true;
@@ -2053,6 +2060,242 @@ export class ToolHandlers {
         backup_path: null,
         conversation_summaries: [],
         message: `Error: ${(error as Error).message}`
+      };
+    }
+  }
+
+  // ==================== High-Value Utility Tools ====================
+
+  /**
+   * Search for all context related to a specific file.
+   *
+   * Combines discussions, decisions, and mistakes related to a file
+   * in one convenient query.
+   *
+   * @param args - Search arguments with file_path
+   * @returns Combined file context from all sources
+   */
+  async searchByFile(args: Record<string, unknown>): Promise<Types.SearchByFileResponse> {
+    const typedArgs = args as unknown as Types.SearchByFileArgs;
+    const filePath = typedArgs.file_path;
+    const limit = typedArgs.limit || 5;
+
+    if (!filePath) {
+      return {
+        file_path: "",
+        discussions: [],
+        decisions: [],
+        mistakes: [],
+        total_mentions: 0,
+        message: "Error: file_path is required",
+      };
+    }
+
+    // Normalize the file path for searching (handle both relative and absolute)
+    const normalizedPath = filePath.replace(/^\.\//, "");
+    const escapedPath = sanitizeForLike(normalizedPath);
+
+    try {
+      // Search messages mentioning this file
+      interface MessageRow {
+        id: string;
+        conversation_id: string;
+        content: string;
+        timestamp: number;
+        role: string;
+      }
+      const messagesQuery = `
+        SELECT id, conversation_id, content, timestamp, role
+        FROM messages
+        WHERE content LIKE ? OR content LIKE ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `;
+      const discussions = this.db
+        .prepare(messagesQuery)
+        .all(`%${escapedPath}%`, `%/${escapedPath}%`, limit) as MessageRow[];
+
+      // Search decisions related to this file
+      interface DecisionRow {
+        id: string;
+        decision_text: string;
+        rationale: string | null;
+        context: string | null;
+        timestamp: number;
+      }
+      const decisionsQuery = `
+        SELECT d.id, d.decision_text, d.rationale, d.context, d.timestamp
+        FROM decisions d
+        LEFT JOIN decision_files df ON d.id = df.decision_id
+        WHERE df.file_path LIKE ?
+           OR df.file_path LIKE ?
+           OR d.decision_text LIKE ?
+        ORDER BY d.timestamp DESC
+        LIMIT ?
+      `;
+      const decisions = this.db
+        .prepare(decisionsQuery)
+        .all(`%${escapedPath}%`, `%/${escapedPath}%`, `%${escapedPath}%`, limit) as DecisionRow[];
+
+      // Search mistakes related to this file
+      interface MistakeRow {
+        id: string;
+        mistake_type: string;
+        what_went_wrong: string;
+        correction: string | null;
+        timestamp: number;
+      }
+      const mistakesQuery = `
+        SELECT m.id, m.mistake_type, m.what_went_wrong, m.correction, m.timestamp
+        FROM mistakes m
+        LEFT JOIN mistake_files mf ON m.id = mf.mistake_id
+        WHERE mf.file_path LIKE ?
+           OR mf.file_path LIKE ?
+           OR m.what_went_wrong LIKE ?
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+      `;
+      const mistakes = this.db
+        .prepare(mistakesQuery)
+        .all(`%${escapedPath}%`, `%/${escapedPath}%`, `%${escapedPath}%`, limit) as MistakeRow[];
+
+      const totalMentions = discussions.length + decisions.length + mistakes.length;
+
+      return {
+        file_path: filePath,
+        discussions: discussions.map((d) => ({
+          id: d.id,
+          conversation_id: d.conversation_id,
+          content: d.content.substring(0, 500),
+          timestamp: d.timestamp,
+          role: d.role,
+        })),
+        decisions: decisions.map((d) => ({
+          id: d.id,
+          decision_text: d.decision_text,
+          rationale: d.rationale || undefined,
+          context: d.context || undefined,
+          timestamp: d.timestamp,
+        })),
+        mistakes: mistakes.map((m) => ({
+          id: m.id,
+          mistake_type: m.mistake_type,
+          what_went_wrong: m.what_went_wrong,
+          correction: m.correction || undefined,
+          timestamp: m.timestamp,
+        })),
+        total_mentions: totalMentions,
+        message:
+          totalMentions > 0
+            ? `Found ${totalMentions} mentions: ${discussions.length} discussions, ${decisions.length} decisions, ${mistakes.length} mistakes`
+            : `No mentions found for file: ${filePath}`,
+      };
+    } catch (error) {
+      return {
+        file_path: filePath,
+        discussions: [],
+        decisions: [],
+        mistakes: [],
+        total_mentions: 0,
+        message: `Error searching for file: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * List recent conversation sessions.
+   *
+   * Provides an overview of recent sessions with basic stats.
+   *
+   * @param args - Query arguments with limit/offset
+   * @returns List of recent sessions with summaries
+   */
+  async listRecentSessions(args: Record<string, unknown>): Promise<Types.ListRecentSessionsResponse> {
+    const typedArgs = args as unknown as Types.ListRecentSessionsArgs;
+    const limit = typedArgs.limit || 10;
+    const offset = typedArgs.offset || 0;
+    const projectPath = typedArgs.project_path;
+
+    try {
+      interface SessionRow {
+        id: string;
+        session_id: string;
+        project_path: string;
+        created_at: number;
+        message_count: number;
+        first_message_preview: string | null;
+      }
+
+      let query: string;
+      let params: (string | number)[];
+
+      if (projectPath) {
+        query = `
+          SELECT
+            c.id,
+            c.session_id,
+            c.project_path,
+            c.created_at,
+            (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count,
+            (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY timestamp ASC LIMIT 1) as first_message_preview
+          FROM conversations c
+          WHERE c.project_path = ?
+          ORDER BY c.created_at DESC
+          LIMIT ? OFFSET ?
+        `;
+        params = [projectPath, limit + 1, offset];
+      } else {
+        query = `
+          SELECT
+            c.id,
+            c.session_id,
+            c.project_path,
+            c.created_at,
+            (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count,
+            (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY timestamp ASC LIMIT 1) as first_message_preview
+          FROM conversations c
+          ORDER BY c.created_at DESC
+          LIMIT ? OFFSET ?
+        `;
+        params = [limit + 1, offset];
+      }
+
+      const rows = this.db.prepare(query).all(...params) as SessionRow[];
+      const hasMore = rows.length > limit;
+      const sessions = hasMore ? rows.slice(0, limit) : rows;
+
+      // Count total sessions
+      interface CountRow {
+        total: number;
+      }
+      const countQuery = projectPath
+        ? "SELECT COUNT(*) as total FROM conversations WHERE project_path = ?"
+        : "SELECT COUNT(*) as total FROM conversations";
+      const countParams = projectPath ? [projectPath] : [];
+      const countRow = this.db.prepare(countQuery).get(...countParams) as CountRow;
+      const totalSessions = countRow?.total || 0;
+
+      return {
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          session_id: s.session_id,
+          project_path: s.project_path,
+          created_at: s.created_at,
+          message_count: s.message_count,
+          first_message_preview: s.first_message_preview
+            ? s.first_message_preview.substring(0, 200)
+            : undefined,
+        })),
+        total_sessions: totalSessions,
+        has_more: hasMore,
+        message: `Found ${totalSessions} sessions${projectPath ? ` for ${projectPath}` : ""}`,
+      };
+    } catch (error) {
+      return {
+        sessions: [],
+        total_sessions: 0,
+        has_more: false,
+        message: `Error listing sessions: ${(error as Error).message}`,
       };
     }
   }
@@ -2421,7 +2664,8 @@ export class ToolHandlers {
           const semanticSearch = new SemanticSearch(projectDb);
 
           // Search this specific project's database
-          const localResults = await semanticSearch.searchConversations(query, limit);
+          // Fetch limit+offset to properly support global pagination after merge
+          const localResults = await semanticSearch.searchConversations(query, limit + offset);
 
           // Filter by date range if specified
           const filteredResults = date_range

@@ -547,6 +547,60 @@ export interface ForgetByTopicResponse {
   message: string;
 }
 
+// ==================== High-Value Utility Tools ====================
+
+export interface SearchByFileArgs {
+  file_path: string;
+  limit?: number;
+}
+
+export interface SearchByFileResponse {
+  file_path: string;
+  discussions: Array<{
+    id: string;
+    conversation_id: string;
+    content: string;
+    timestamp: number;
+    role: string;
+  }>;
+  decisions: Array<{
+    id: string;
+    decision_text: string;
+    rationale?: string;
+    context?: string;
+    timestamp: number;
+  }>;
+  mistakes: Array<{
+    id: string;
+    mistake_type: string;
+    what_went_wrong: string;
+    correction?: string;
+    timestamp: number;
+  }>;
+  total_mentions: number;
+  message: string;
+}
+
+export interface ListRecentSessionsArgs {
+  limit?: number;
+  offset?: number;
+  project_path?: string;
+}
+
+export interface ListRecentSessionsResponse {
+  sessions: Array<{
+    id: string;
+    session_id: string;
+    project_path: string;
+    created_at: number;
+    message_count: number;
+    first_message_preview?: string;
+  }>;
+  total_sessions: number;
+  has_more: boolean;
+  message: string;
+}
+
 // ==================== Global Cross-Project Tools ====================
 
 export interface IndexAllProjectsArgs {

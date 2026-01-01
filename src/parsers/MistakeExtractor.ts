@@ -60,24 +60,43 @@ export interface Mistake {
  * mistakes and prevent repetition.
  */
 export class MistakeExtractor {
-  // User correction indicators
-  private readonly CORRECTION_INDICATORS = [
-    /^no[,\s]/i,
-    /that'?s?\s+(?:wrong|incorrect|not right|a mistake)/i,
-    /(?:you|that)\s+(?:made|caused|introduced)\s+(?:a|an)\s+(?:error|bug|mistake)/i,
-    /don't\s+do\s+(?:that|this)/i,
-    /(?:should not|shouldn't|must not|mustn't)\s+(?:have\s+)?(?:done|used)/i,
-    /(?:fix|correct|change)\s+(?:that|this)/i,
+  // Minimum severity score required to store a mistake
+  // Score 1 keeps any classified mistake - filtering is done by stricter patterns
+  private readonly MIN_SEVERITY_SCORE = 1;
+
+  // Noise patterns to filter out
+  private readonly NOISE_PATTERNS = [
+    /this session is being continued/i,
+    /conversation is summarized below/i,
+    /previous conversation that ran out of context/i,
+    /here is the summary/i,
+    /summary of the conversation/i,
   ];
 
-  // Error indicators in assistant messages
+  // User correction indicators - must be explicit corrections about code/approach
+  private readonly CORRECTION_INDICATORS = [
+    // "That's wrong, you should use X"
+    /that'?s?\s+(?:wrong|incorrect|a mistake)[,\s]+(?:you should|use|the correct)/i,
+    // "You made an error in the code/implementation"
+    /(?:you|that)\s+(?:made|caused|introduced)\s+(?:a|an)\s+(?:error|bug)\s+(?:in|with|when)/i,
+    // "Don't do that because X"
+    /don't\s+do\s+that[,\s]+(?:because|it will|it causes)/i,
+    // "You shouldn't have done/used X because Y"
+    /(?:should not|shouldn't)\s+(?:have\s+)?(?:done|used)\s+(.+?)\s+(?:because|since)/i,
+    // "Fix the bug/error in X"
+    /(?:fix|correct)\s+(?:the|that)\s+(?:bug|error)\s+(?:in|with)/i,
+  ];
+
+  // Error indicators - stricter, real errors only
   private readonly ERROR_INDICATORS = [
-    /error:/i,
-    /failed:/i,
-    /exception:/i,
-    /(?:this|that)\s+(?:didn't|doesn't|won't)\s+work/i,
-    /(?:broke|breaking|broken)/i,
-    /(?:issue|problem|bug)/i,
+    /error:\s*\w+/i,  // error: SomeError
+    /Error:\s*\w+/,   // Error: SomeError
+    /failed:\s*.+/i,  // failed: something
+    /exception:\s*.+/i, // exception: something
+    /TypeError:|ReferenceError:|SyntaxError:/i, // JS errors
+    /ENOENT|EACCES|EPERM/i, // Node.js file errors
+    /command\s+failed/i, // command failed
+    /exit\s+code\s+[1-9]/i, // non-zero exit code
   ];
 
   // Mistake type patterns
@@ -120,19 +139,34 @@ export class MistakeExtractor {
   extractMistakes(messages: Message[], toolResults: ToolResult[]): Mistake[] {
     const mistakes: Mistake[] = [];
 
-    // Extract from tool errors
+    // Filter messages to exclude noise
+    const cleanMessages = messages.filter((m) => !this.isNoiseContent(m.content || ""));
+
+    // Extract from tool errors (tool errors are real, keep them)
     const toolErrors = this.extractToolErrors(toolResults, messages);
     mistakes.push(...toolErrors);
 
     // Extract from user corrections
-    const userCorrections = this.extractUserCorrections(messages);
+    const userCorrections = this.extractUserCorrections(cleanMessages);
     mistakes.push(...userCorrections);
 
     // Extract from error discussions
-    const errorDiscussions = this.extractErrorDiscussions(messages);
+    const errorDiscussions = this.extractErrorDiscussions(cleanMessages);
     mistakes.push(...errorDiscussions);
 
-    return this.deduplicateMistakes(mistakes);
+    // Deduplicate and filter by severity
+    const deduplicated = this.deduplicateMistakes(mistakes);
+    return deduplicated.filter(
+      (m) => this.scoreMistakeSeverity(m) >= this.MIN_SEVERITY_SCORE
+    );
+  }
+
+  /**
+   * Check if content is noise that should be filtered out
+   */
+  private isNoiseContent(content: string): boolean {
+    const firstChunk = content.substring(0, 500);
+    return this.NOISE_PATTERNS.some((pattern) => pattern.test(firstChunk));
   }
 
   /**
@@ -433,8 +467,10 @@ export class MistakeExtractor {
     const seen = new Set<string>();
 
     for (const mistake of mistakes) {
-      // Create signature
-      const signature = `${mistake.what_went_wrong.substring(0, 100)}_${mistake.timestamp}`;
+      // Create signature including message_id to avoid collisions
+      // between different mistakes with similar text in the same conversation
+      const textPrefix = mistake.what_went_wrong.substring(0, 100);
+      const signature = `${mistake.message_id}_${textPrefix}_${mistake.timestamp}`;
 
       if (!seen.has(signature)) {
         seen.add(signature);

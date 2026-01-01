@@ -52,7 +52,7 @@ describe('DecisionExtractor', () => {
           conversation_id: 'conv-1',
           message_type: 'text',
           role: 'user',
-          content: 'No, instead use approach B because it is more efficient',
+          content: 'No, use approach B instead because it is more efficient for the database queries',
           timestamp: Date.now() + 1000,
           is_sidechain: false,
           metadata: {},
@@ -156,7 +156,7 @@ describe('DecisionExtractor', () => {
           conversation_id: 'conv-1',
           message_type: 'text',
           role: 'assistant',
-          content: 'Decision: use SQLite because it is simple and requires no server.',
+          content: 'For the database layer, we decided to use SQLite instead of PostgreSQL because it is simple and requires no server.',
           timestamp: 12345,
           is_sidechain: false,
           metadata: {},
@@ -298,14 +298,17 @@ describe('DecisionExtractor', () => {
   });
 
   describe('Correction Pattern Matching', () => {
-    it('should match "no," correction pattern', () => {
+    // Note: Stricter patterns now require technical context (keywords like database,
+    // api, function, class, etc.) to filter out non-technical corrections
+
+    it('should match "no," correction pattern with technical context', () => {
       const messages: Message[] = [
         {
           id: 'msg-1',
           conversation_id: 'conv-1',
           message_type: 'text',
           role: 'user',
-          content: 'No, use option B instead',
+          content: 'No, use the database connection pool instead',
           timestamp: Date.now(),
           is_sidechain: false,
           metadata: {},
@@ -316,14 +319,14 @@ describe('DecisionExtractor', () => {
       expect(decisions.length).toBeGreaterThan(0);
     });
 
-    it('should match "that\'s wrong" correction pattern', () => {
+    it('should match "that\'s wrong" correction pattern with technical context', () => {
       const messages: Message[] = [
         {
           id: 'msg-1',
           conversation_id: 'conv-1',
           message_type: 'text',
           role: 'user',
-          content: 'That\'s wrong, the correct approach is Y',
+          content: 'That\'s wrong, the correct approach is to use the API endpoint',
           timestamp: Date.now(),
           is_sidechain: false,
           metadata: {},
@@ -334,14 +337,14 @@ describe('DecisionExtractor', () => {
       expect(decisions.length).toBeGreaterThan(0);
     });
 
-    it('should match "actually," correction pattern', () => {
+    it('should match "actually," correction pattern with technical context', () => {
       const messages: Message[] = [
         {
           id: 'msg-1',
           conversation_id: 'conv-1',
           message_type: 'text',
           role: 'user',
-          content: 'Actually, we should use method Z',
+          content: 'Actually, we should use the class method instead because it handles caching',
           timestamp: Date.now(),
           is_sidechain: false,
           metadata: {},

@@ -273,10 +273,11 @@ describe("Migration Tool Handlers", () => {
     });
 
     it("should validate source folder exists", async () => {
-      // Test: Non-existent source
+      // Test: Non-existent source (but path must be under projectsDir to pass containment check)
+      const nonExistentFolder = join(projectsDir, "-Users-nonexistent-folder");
       await expect(
         handlers.migrateProject({
-          source_folder: "/nonexistent/folder",
+          source_folder: nonExistentFolder,
           old_project_path: "/old",
           new_project_path: "/new",
           dry_run: false,

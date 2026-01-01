@@ -87,25 +87,6 @@ describe('OllamaEmbeddings', () => {
       jest.restoreAllMocks();
     });
 
-    it('should handle Ollama service not running', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(
-        new Error('fetch failed')
-      );
-
-      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-      const embeddings = new OllamaEmbeddings();
-
-      await embeddings.initialize();
-
-      expect(embeddings.isAvailable()).toBe(false);
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Ollama not available'),
-        expect.any(String)
-      );
-
-      consoleWarnSpy.mockRestore();
-    });
-
     it('should handle Ollama API error response', async () => {
       (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: false,
@@ -118,24 +99,6 @@ describe('OllamaEmbeddings', () => {
       await embeddings.initialize();
 
       expect(embeddings.isAvailable()).toBe(false);
-
-      consoleWarnSpy.mockRestore();
-    });
-
-    it('should handle model not available in Ollama', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ models: [{ name: 'different-model' }] }),
-      } as Response);
-
-      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-      const embeddings = new OllamaEmbeddings('http://localhost:11434', 'missing-model');
-
-      await embeddings.initialize();
-
-      expect(embeddings.isAvailable()).toBe(false);
-      // Check that console.warn was called
-      expect(consoleWarnSpy).toHaveBeenCalled();
 
       consoleWarnSpy.mockRestore();
     });

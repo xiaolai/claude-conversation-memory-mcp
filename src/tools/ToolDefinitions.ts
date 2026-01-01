@@ -494,6 +494,7 @@ export const TOOLS = {
           type: "array",
           description: "Topics or keywords to search for (e.g., ['authentication', 'redesign'])",
           items: { type: "string" },
+          minItems: 1,
         },
         project_path: {
           type: "string",
@@ -506,6 +507,52 @@ export const TOOLS = {
         },
       },
       required: ["keywords"],
+    },
+  },
+
+  // ==================== High-Value Utility Tools ====================
+
+  search_by_file: {
+    name: "search_by_file",
+    description: "Find all conversation context related to a specific file: discussions, decisions, mistakes, and changes. Essential for understanding file history before modifications.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: {
+          type: "string",
+          description: "Path to the file (can be relative or absolute)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum results per category (default: 5)",
+          default: 5,
+        },
+      },
+      required: ["file_path"],
+    },
+  },
+
+  list_recent_sessions: {
+    name: "list_recent_sessions",
+    description: "List recent conversation sessions with summary info (date, message count, topics). Useful for understanding conversation history at a glance.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum sessions to return (default: 10)",
+          default: 10,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N sessions for pagination (default: 0)",
+          default: 0,
+        },
+        project_path: {
+          type: "string",
+          description: "Optional: filter to specific project path",
+        },
+      },
     },
   },
 
