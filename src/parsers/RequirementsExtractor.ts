@@ -110,6 +110,18 @@ export class RequirementsExtractor {
   ];
 
   /**
+   * Get combined output from tool result (stdout + stderr + content)
+   * Test output may go to either stdout or stderr depending on the tool
+   */
+  private getToolOutput(result: ToolResult): string {
+    const parts: string[] = [];
+    if (result.stdout) {parts.push(result.stdout);}
+    if (result.stderr) {parts.push(result.stderr);}
+    if (result.content) {parts.push(result.content);}
+    return parts.join("\n");
+  }
+
+  /**
    * Extract requirements from conversation messages.
    *
    * Analyzes messages using pattern matching to identify four types of requirements:
@@ -335,8 +347,8 @@ export class RequirementsExtractor {
       return fileMatch[1];
     }
 
-    // Try to extract from result
-    const resultContent = result.stdout || result.content || "";
+    // Try to extract from result (check all output sources)
+    const resultContent = this.getToolOutput(result);
     const suiteMatch = resultContent.match(/(?:Test Suite|Describe):\s*(.+)/i);
     if (suiteMatch) {
       return suiteMatch[1].trim();
@@ -356,7 +368,7 @@ export class RequirementsExtractor {
       return "error";
     }
 
-    const output = (result.stdout || result.content || "").toLowerCase();
+    const output = this.getToolOutput(result).toLowerCase();
 
     // Check for pass indicators
     if (
@@ -384,7 +396,7 @@ export class RequirementsExtractor {
   private extractPerformanceData(
     result: ToolResult
   ): Record<string, unknown> | undefined {
-    const output = result.stdout || result.content || "";
+    const output = this.getToolOutput(result);
 
     const data: Record<string, unknown> = {};
 
@@ -414,7 +426,7 @@ export class RequirementsExtractor {
    * Extract files that were tested
    */
   private extractTestedFiles(result: ToolResult): string[] {
-    const output = result.stdout || result.content || "";
+    const output = this.getToolOutput(result);
     const files: string[] = [];
 
     // Look for file paths
