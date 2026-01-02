@@ -79,6 +79,19 @@ export class ConversationMemoryServer {
       search_all_conversations: (args) => this.handlers.searchAllConversations(args),
       get_all_decisions: (args) => this.handlers.getAllDecisions(args),
       search_all_mistakes: (args) => this.handlers.searchAllMistakes(args),
+      // Live Context Layer: Working Memory
+      remember: (args) => this.handlers.remember(args),
+      recall: (args) => this.handlers.recall(args),
+      recall_relevant: (args) => this.handlers.recallRelevant(args),
+      list_memory: (args) => this.handlers.listMemory(args),
+      forget: (args) => this.handlers.forget(args),
+      // Live Context Layer: Session Handoff
+      prepare_handoff: (args) => this.handlers.prepareHandoff(args),
+      resume_from_handoff: (args) => this.handlers.resumeFromHandoff(args),
+      list_handoffs: (args) => this.handlers.listHandoffs(args),
+      // Live Context Layer: Context Injection
+      get_startup_context: (args) => this.handlers.getStartupContext(args),
+      inject_relevant_context: (args) => this.handlers.injectRelevantContext(args),
     };
   }
 

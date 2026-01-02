@@ -121,18 +121,21 @@ export class SQLiteManager {
     }
 
     try {
-      // Check if tables already exist with correct dimensions
-      // If they exist with different dimensions, we need to drop and recreate
-      try {
-        const result = this.db.prepare("SELECT 1 FROM vec_message_embeddings LIMIT 1").get();
-        if (result) {
-          // Tables exist, assume they have correct dimensions
-          // (Recreating would lose data)
-          console.error(`✓ sqlite-vec virtual tables already exist`);
-          return;
+      // Check if ALL vec tables exist - only skip if all three exist
+      let allTablesExist = true;
+      const vecTables = ['vec_message_embeddings', 'vec_decision_embeddings', 'vec_mistake_embeddings'];
+      for (const table of vecTables) {
+        try {
+          this.db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get();
+        } catch {
+          allTablesExist = false;
+          break;
         }
-      } catch {
-        // Tables don't exist, create them
+      }
+
+      if (allTablesExist) {
+        console.error(`✓ sqlite-vec virtual tables already exist`);
+        return;
       }
 
       // Create message embeddings virtual table

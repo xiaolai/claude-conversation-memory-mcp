@@ -225,6 +225,10 @@ export class ConversationMemory {
       await this.semanticSearch.indexMessages(parseResult.messages);
       await this.semanticSearch.indexDecisions(decisions);
       await this.semanticSearch.indexMistakes(mistakes);
+      // Also index any decisions/mistakes in DB that are missing embeddings
+      // (catches items created before embeddings were available)
+      await this.semanticSearch.indexMissingDecisionEmbeddings();
+      await this.semanticSearch.indexMissingMistakeEmbeddings();
       console.error("✓ Semantic indexing complete");
     } catch (error) {
       embeddingError = (error as Error).message;

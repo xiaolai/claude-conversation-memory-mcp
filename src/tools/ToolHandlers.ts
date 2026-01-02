@@ -2945,4 +2945,597 @@ export class ToolHandlers {
       globalIndex.close();
     }
   }
+
+  // ==================== Live Context Layer Tools ====================
+
+  /**
+   * Store a fact, decision, or context in working memory.
+   *
+   * @param args - Remember arguments with key, value, context, tags, ttl
+   * @returns The stored memory item
+   */
+  async remember(args: Record<string, unknown>): Promise<Types.RememberResponse> {
+    const { WorkingMemoryStore } = await import("../memory/WorkingMemoryStore.js");
+    const typedArgs = args as unknown as Types.RememberArgs;
+    const {
+      key,
+      value,
+      context,
+      tags,
+      ttl,
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    if (!key || !value) {
+      return {
+        success: false,
+        message: "key and value are required",
+      };
+    }
+
+    try {
+      const store = new WorkingMemoryStore(this.db.getDatabase());
+      const item = store.remember({
+        key,
+        value,
+        context,
+        tags,
+        ttl,
+        projectPath: project_path,
+      });
+
+      return {
+        success: true,
+        item: {
+          id: item.id,
+          key: item.key,
+          value: item.value,
+          context: item.context,
+          tags: item.tags,
+          created_at: new Date(item.createdAt).toISOString(),
+          updated_at: new Date(item.updatedAt).toISOString(),
+          expires_at: item.expiresAt ? new Date(item.expiresAt).toISOString() : undefined,
+        },
+        message: `Remembered "${key}" successfully`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Error storing memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Recall a specific memory item by key.
+   *
+   * @param args - Recall arguments with key
+   * @returns The recalled memory item or null
+   */
+  async recall(args: Record<string, unknown>): Promise<Types.RecallResponse> {
+    const { WorkingMemoryStore } = await import("../memory/WorkingMemoryStore.js");
+    const typedArgs = args as unknown as Types.RecallArgs;
+    const { key, project_path = process.cwd() } = typedArgs;
+
+    if (!key) {
+      return {
+        success: false,
+        found: false,
+        message: "key is required",
+      };
+    }
+
+    try {
+      const store = new WorkingMemoryStore(this.db.getDatabase());
+      const item = store.recall(key, project_path);
+
+      if (!item) {
+        return {
+          success: true,
+          found: false,
+          message: `No memory found for key "${key}"`,
+        };
+      }
+
+      return {
+        success: true,
+        found: true,
+        item: {
+          id: item.id,
+          key: item.key,
+          value: item.value,
+          context: item.context,
+          tags: item.tags,
+          created_at: new Date(item.createdAt).toISOString(),
+          updated_at: new Date(item.updatedAt).toISOString(),
+          expires_at: item.expiresAt ? new Date(item.expiresAt).toISOString() : undefined,
+        },
+        message: `Found memory for "${key}"`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        found: false,
+        message: `Error recalling memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Search working memory semantically.
+   *
+   * @param args - Search arguments with query
+   * @returns Relevant memory items
+   */
+  async recallRelevant(args: Record<string, unknown>): Promise<Types.RecallRelevantResponse> {
+    const { WorkingMemoryStore } = await import("../memory/WorkingMemoryStore.js");
+    const typedArgs = args as unknown as Types.RecallRelevantArgs;
+    const { query, limit = 10, project_path = process.cwd() } = typedArgs;
+
+    if (!query) {
+      return {
+        success: false,
+        items: [],
+        message: "query is required",
+      };
+    }
+
+    try {
+      const store = new WorkingMemoryStore(this.db.getDatabase());
+      const results = store.recallRelevant({
+        query,
+        projectPath: project_path,
+        limit,
+      });
+
+      return {
+        success: true,
+        items: results.map(item => ({
+          id: item.id,
+          key: item.key,
+          value: item.value,
+          context: item.context,
+          tags: item.tags,
+          similarity: item.similarity,
+          created_at: new Date(item.createdAt).toISOString(),
+          updated_at: new Date(item.updatedAt).toISOString(),
+        })),
+        total_found: results.length,
+        message: results.length > 0
+          ? `Found ${results.length} relevant memory item(s)`
+          : "No relevant memories found",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        items: [],
+        message: `Error searching memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * List all items in working memory.
+   *
+   * @param args - List arguments with optional tags filter
+   * @returns All memory items
+   */
+  async listMemory(args: Record<string, unknown>): Promise<Types.ListMemoryResponse> {
+    const { WorkingMemoryStore } = await import("../memory/WorkingMemoryStore.js");
+    const typedArgs = args as Types.ListMemoryArgs;
+    const {
+      tags,
+      limit = 100,
+      offset = 0,
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    try {
+      const store = new WorkingMemoryStore(this.db.getDatabase());
+      const items = store.list(project_path, { tags, limit: limit + 1, offset });
+      const hasMore = items.length > limit;
+      const results = hasMore ? items.slice(0, limit) : items;
+      const totalCount = store.count(project_path);
+
+      return {
+        success: true,
+        items: results.map(item => ({
+          id: item.id,
+          key: item.key,
+          value: item.value,
+          context: item.context,
+          tags: item.tags,
+          created_at: new Date(item.createdAt).toISOString(),
+          updated_at: new Date(item.updatedAt).toISOString(),
+          expires_at: item.expiresAt ? new Date(item.expiresAt).toISOString() : undefined,
+        })),
+        total_count: totalCount,
+        has_more: hasMore,
+        offset,
+        message: `Listed ${results.length} of ${totalCount} memory item(s)`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        items: [],
+        total_count: 0,
+        has_more: false,
+        offset: 0,
+        message: `Error listing memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Remove a memory item by key.
+   *
+   * @param args - Forget arguments with key
+   * @returns Success status
+   */
+  async forget(args: Record<string, unknown>): Promise<Types.ForgetResponse> {
+    const { WorkingMemoryStore } = await import("../memory/WorkingMemoryStore.js");
+    const typedArgs = args as unknown as Types.ForgetArgs;
+    const { key, project_path = process.cwd() } = typedArgs;
+
+    if (!key) {
+      return {
+        success: false,
+        message: "key is required",
+      };
+    }
+
+    try {
+      const store = new WorkingMemoryStore(this.db.getDatabase());
+      const deleted = store.forget(key, project_path);
+
+      return {
+        success: deleted,
+        message: deleted
+          ? `Forgot memory for "${key}"`
+          : `No memory found for key "${key}"`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Error forgetting memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  // ============================================================
+  // SESSION HANDOFF TOOLS
+  // ============================================================
+
+  /**
+   * Prepare a handoff document from the current session.
+   * Captures decisions, active files, pending tasks, and working memory.
+   *
+   * @param args - Handoff preparation arguments
+   * @returns The prepared handoff document
+   */
+  async prepareHandoff(args: Record<string, unknown>): Promise<Types.PrepareHandoffResponse> {
+    const { SessionHandoffStore } = await import("../handoff/SessionHandoffStore.js");
+    const typedArgs = args as unknown as Types.PrepareHandoffArgs;
+    const {
+      session_id,
+      include = ["decisions", "files", "tasks", "memory"],
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    try {
+      const store = new SessionHandoffStore(this.db.getDatabase());
+      const handoff = store.prepareHandoff({
+        sessionId: session_id,
+        projectPath: project_path,
+        include: include as Array<"decisions" | "files" | "tasks" | "memory">,
+      });
+
+      return {
+        success: true,
+        handoff: {
+          id: handoff.id,
+          from_session_id: handoff.fromSessionId,
+          project_path: handoff.projectPath,
+          created_at: new Date(handoff.createdAt).toISOString(),
+          summary: handoff.contextSummary,
+          decisions_count: handoff.decisions.length,
+          files_count: handoff.activeFiles.length,
+          tasks_count: handoff.pendingTasks.length,
+          memory_count: handoff.workingMemory.length,
+        },
+        message: `Handoff prepared with ${handoff.decisions.length} decisions, ${handoff.activeFiles.length} files, ${handoff.pendingTasks.length} tasks, ${handoff.workingMemory.length} memory items.`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Error preparing handoff: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Resume from a handoff in a new session.
+   * Loads context from a previous session for continuity.
+   *
+   * @param args - Resume arguments
+   * @returns The resumed handoff context
+   */
+  async resumeFromHandoff(args: Record<string, unknown>): Promise<Types.ResumeFromHandoffResponse> {
+    const { SessionHandoffStore } = await import("../handoff/SessionHandoffStore.js");
+    const typedArgs = args as unknown as Types.ResumeFromHandoffArgs;
+    const {
+      handoff_id,
+      new_session_id,
+      inject_context = true,
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    try {
+      const store = new SessionHandoffStore(this.db.getDatabase());
+      const handoff = store.resumeFromHandoff({
+        handoffId: handoff_id,
+        projectPath: project_path,
+        newSessionId: new_session_id,
+        injectContext: inject_context,
+      });
+
+      if (!handoff) {
+        return {
+          success: true,
+          found: false,
+          message: "No unresumed handoff found for this project.",
+        };
+      }
+
+      return {
+        success: true,
+        found: true,
+        handoff: {
+          id: handoff.id,
+          from_session_id: handoff.fromSessionId,
+          project_path: handoff.projectPath,
+          created_at: new Date(handoff.createdAt).toISOString(),
+          summary: handoff.contextSummary,
+          decisions: handoff.decisions.map((d) => ({
+            text: d.text,
+            rationale: d.rationale,
+            timestamp: new Date(d.timestamp).toISOString(),
+          })),
+          active_files: handoff.activeFiles.map((f) => ({
+            path: f.path,
+            last_action: f.lastAction,
+          })),
+          pending_tasks: handoff.pendingTasks.map((t) => ({
+            description: t.description,
+            status: t.status,
+          })),
+          memory_items: handoff.workingMemory.map((m) => ({
+            key: m.key,
+            value: m.value,
+          })),
+        },
+        message: `Resumed from handoff: ${handoff.contextSummary}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        found: false,
+        message: `Error resuming from handoff: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * List available handoffs for a project.
+   *
+   * @param args - List arguments
+   * @returns List of available handoffs
+   */
+  async listHandoffs(args: Record<string, unknown>): Promise<Types.ListHandoffsResponse> {
+    const { SessionHandoffStore } = await import("../handoff/SessionHandoffStore.js");
+    const typedArgs = args as unknown as Types.ListHandoffsArgs;
+    const {
+      limit = 10,
+      include_resumed = false,
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    try {
+      const store = new SessionHandoffStore(this.db.getDatabase());
+      const handoffs = store.listHandoffs(project_path, {
+        limit,
+        includeResumed: include_resumed,
+      });
+
+      return {
+        success: true,
+        handoffs: handoffs.map((h) => ({
+          id: h.id,
+          from_session_id: h.fromSessionId,
+          created_at: new Date(h.createdAt).toISOString(),
+          resumed_by: h.resumedBy,
+          resumed_at: h.resumedAt ? new Date(h.resumedAt).toISOString() : undefined,
+          summary: h.summary,
+        })),
+        total_count: handoffs.length,
+        message: `Found ${handoffs.length} handoff(s)`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        handoffs: [],
+        total_count: 0,
+        message: `Error listing handoffs: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  // ============================================================
+  // CONTEXT INJECTION TOOLS
+  // ============================================================
+
+  /**
+   * Get context to inject at the start of a new conversation.
+   * Combines handoffs, decisions, working memory, and file history.
+   *
+   * @param args - Context injection arguments
+   * @returns Structured context for injection
+   */
+  async getStartupContext(args: Record<string, unknown>): Promise<Types.GetStartupContextResponse> {
+    const { ContextInjector } = await import("../context/ContextInjector.js");
+    const typedArgs = args as unknown as Types.GetStartupContextArgs;
+    const {
+      query,
+      max_tokens = 2000,
+      sources = ["history", "decisions", "memory", "handoffs"],
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    try {
+      const injector = new ContextInjector(this.db.getDatabase());
+      const context = await injector.getRelevantContext({
+        query,
+        projectPath: project_path,
+        maxTokens: max_tokens,
+        sources: sources as Array<"history" | "decisions" | "memory" | "handoffs">,
+      });
+
+      return {
+        success: true,
+        context: {
+          handoff: context.handoff ? {
+            id: context.handoff.id,
+            from_session_id: context.handoff.fromSessionId,
+            project_path: context.handoff.projectPath,
+            created_at: new Date(context.handoff.createdAt).toISOString(),
+            summary: context.handoff.contextSummary,
+            decisions: context.handoff.decisions.map(d => ({
+              text: d.text,
+              rationale: d.rationale,
+              timestamp: new Date(d.timestamp).toISOString(),
+            })),
+            active_files: context.handoff.activeFiles.map(f => ({
+              path: f.path,
+              last_action: f.lastAction,
+            })),
+            pending_tasks: context.handoff.pendingTasks.map(t => ({
+              description: t.description,
+              status: t.status,
+            })),
+            memory_items: context.handoff.workingMemory.map(m => ({
+              key: m.key,
+              value: m.value,
+            })),
+          } : undefined,
+          decisions: context.decisions.map(d => ({
+            id: d.id,
+            text: d.text,
+            rationale: d.rationale,
+            timestamp: new Date(d.timestamp).toISOString(),
+          })),
+          memory: context.memory.map(m => ({
+            id: m.id,
+            key: m.key,
+            value: m.value,
+            context: m.context,
+            tags: m.tags,
+            created_at: new Date(m.createdAt).toISOString(),
+            updated_at: new Date(m.updatedAt).toISOString(),
+          })),
+          recent_files: context.recentFiles.map(f => ({
+            path: f.path,
+            last_action: f.lastAction,
+            timestamp: new Date(f.timestamp).toISOString(),
+          })),
+          summary: context.summary,
+        },
+        token_estimate: context.tokenEstimate,
+        message: `Retrieved context: ${context.summary}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        context: {
+          decisions: [],
+          memory: [],
+          recent_files: [],
+          summary: "",
+        },
+        token_estimate: 0,
+        message: `Error getting startup context: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Inject relevant context based on the first message in a new conversation.
+   * Returns formatted markdown context for direct use.
+   *
+   * @param args - Injection arguments
+   * @returns Formatted context string
+   */
+  async injectRelevantContext(args: Record<string, unknown>): Promise<Types.InjectRelevantContextResponse> {
+    const { ContextInjector } = await import("../context/ContextInjector.js");
+    const typedArgs = args as unknown as Types.InjectRelevantContextArgs;
+    const {
+      message,
+      max_tokens = 2000,
+      sources = ["history", "decisions", "memory", "handoffs"],
+      project_path = process.cwd(),
+    } = typedArgs;
+
+    if (!message) {
+      return {
+        success: false,
+        injected_context: "",
+        sources_used: [],
+        token_count: 0,
+        message: "message is required",
+      };
+    }
+
+    try {
+      const injector = new ContextInjector(this.db.getDatabase());
+      const context = await injector.getRelevantContext({
+        query: message,
+        projectPath: project_path,
+        maxTokens: max_tokens,
+        sources: sources as Array<"history" | "decisions" | "memory" | "handoffs">,
+      });
+
+      // Format for injection
+      const formattedContext = injector.formatForInjection(context);
+
+      // Track which sources were used
+      const sourcesUsed: string[] = [];
+      if (context.handoff) {
+        sourcesUsed.push("handoffs");
+      }
+      if (context.decisions.length > 0) {
+        sourcesUsed.push("decisions");
+      }
+      if (context.memory.length > 0) {
+        sourcesUsed.push("memory");
+      }
+      if (context.recentFiles.length > 0) {
+        sourcesUsed.push("history");
+      }
+
+      return {
+        success: true,
+        injected_context: formattedContext,
+        sources_used: sourcesUsed,
+        token_count: context.tokenEstimate,
+        message: `Injected context from ${sourcesUsed.length} source(s)`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        injected_context: "",
+        sources_used: [],
+        token_count: 0,
+        message: `Error injecting context: ${(error as Error).message}`,
+      };
+    }
+  }
 }

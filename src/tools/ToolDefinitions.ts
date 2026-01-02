@@ -696,4 +696,302 @@ export const TOOLS = {
       required: ["query"],
     },
   },
+
+  // ==================== Live Context Layer Tools ====================
+
+  remember: {
+    name: "remember",
+    description:
+      "Store a fact, decision, or piece of context in working memory. Use this to remember important information that should persist across conversation boundaries. Items are stored per-project and can be recalled by key or searched semantically.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description:
+            "A unique key to identify this memory (e.g., 'storage_decision', 'auth_approach', 'current_task')",
+        },
+        value: {
+          type: "string",
+          description:
+            "The value to remember (e.g., 'Using SQLite for simplicity and portability')",
+        },
+        context: {
+          type: "string",
+          description:
+            "Optional additional context or rationale for this memory",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional tags for categorization (e.g., ['architecture', 'decision'])",
+        },
+        ttl: {
+          type: "number",
+          description:
+            "Optional time-to-live in seconds. Memory will auto-expire after this time.",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key", "value"],
+    },
+  },
+
+  recall: {
+    name: "recall",
+    description:
+      "Retrieve a specific memory item by its key. Use this when you need to recall a specific fact or decision that was previously stored.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "The key of the memory to recall",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key"],
+    },
+  },
+
+  recall_relevant: {
+    name: "recall_relevant",
+    description:
+      "Search working memory semantically to find relevant memories based on a query. Use this when you need to find memories related to a topic but don't know the exact key.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Natural language query to search for (e.g., 'database decisions', 'authentication setup')",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default: 10)",
+          default: 10,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  list_memory: {
+    name: "list_memory",
+    description:
+      "List all items in working memory for the current project. Optionally filter by tags.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional: filter by tags (returns items matching any tag)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of items to return (default: 100)",
+          default: 100,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N items for pagination (default: 0)",
+          default: 0,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  forget: {
+    name: "forget",
+    description:
+      "Remove a memory item by its key. Use this to clean up memories that are no longer relevant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "The key of the memory to forget",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key"],
+    },
+  },
+
+  // ==================== Session Handoff Tools ====================
+
+  prepare_handoff: {
+    name: "prepare_handoff",
+    description:
+      "Prepare a handoff document for transitioning to a new conversation. Extracts key decisions, active files, pending tasks, and working memory to enable seamless continuation in a new session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: {
+          type: "string",
+          description:
+            "Session ID to prepare handoff for (defaults to most recent session)",
+        },
+        include: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["decisions", "files", "tasks", "memory"],
+          },
+          description:
+            "What to include in handoff (default: all). Options: decisions, files, tasks, memory",
+        },
+        context_summary: {
+          type: "string",
+          description:
+            "Optional summary of current context/task to include in handoff",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  resume_from_handoff: {
+    name: "resume_from_handoff",
+    description:
+      "Resume work from a previous handoff document. Loads the context from the handoff and provides a summary of what was being worked on.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        handoff_id: {
+          type: "string",
+          description:
+            "ID of the handoff to resume from (defaults to most recent)",
+        },
+        inject_context: {
+          type: "boolean",
+          description:
+            "Whether to inject the handoff context into the response (default: true)",
+          default: true,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  list_handoffs: {
+    name: "list_handoffs",
+    description:
+      "List available handoff documents for the current project. Shows when each was created and whether it has been resumed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum number of handoffs to return (default: 10)",
+          default: 10,
+        },
+        include_resumed: {
+          type: "boolean",
+          description: "Include handoffs that have already been resumed (default: true)",
+          default: true,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  // ==================== Context Injection Tools ====================
+
+  get_startup_context: {
+    name: "get_startup_context",
+    description:
+      "Get relevant context to inject at the start of a new conversation. Combines recent handoffs, decisions, working memory, and file history based on the query or task description.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Description of what you're about to work on (e.g., 'authentication system', 'database optimization')",
+        },
+        max_tokens: {
+          type: "number",
+          description:
+            "Maximum tokens for context response (default: 2000). Helps stay within context limits.",
+          default: 2000,
+        },
+        sources: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["history", "decisions", "memory", "handoffs"],
+          },
+          description:
+            "Which sources to include (default: all). Options: history, decisions, memory, handoffs",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  inject_relevant_context: {
+    name: "inject_relevant_context",
+    description:
+      "Analyze a message and automatically inject relevant historical context. Use at the start of a conversation to bring in context from past sessions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: {
+          type: "string",
+          description:
+            "The user's first message or task description to analyze for context injection",
+        },
+        max_tokens: {
+          type: "number",
+          description: "Maximum tokens for injected context (default: 1500)",
+          default: 1500,
+        },
+        sources: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["history", "decisions", "memory", "handoffs"],
+          },
+          description: "Which sources to search (default: all)",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["message"],
+    },
+  },
 };

@@ -707,3 +707,220 @@ export interface SearchAllMistakesResponse {
   projects_searched: number;
   message: string;
 }
+
+// ==================== Live Context Layer Tools ====================
+
+// Working Memory Types
+
+export interface MemoryItem {
+  id: string;
+  key: string;
+  value: string;
+  context?: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  expires_at?: string;
+}
+
+export interface MemoryItemWithSimilarity extends MemoryItem {
+  similarity: number;
+}
+
+export interface RememberArgs {
+  key: string;
+  value: string;
+  context?: string;
+  tags?: string[];
+  ttl?: number;
+  project_path?: string;
+}
+
+export interface RememberResponse {
+  success: boolean;
+  item?: MemoryItem;
+  message: string;
+}
+
+export interface RecallArgs {
+  key: string;
+  project_path?: string;
+}
+
+export interface RecallResponse {
+  success: boolean;
+  found: boolean;
+  item?: MemoryItem;
+  message: string;
+}
+
+export interface RecallRelevantArgs {
+  query: string;
+  limit?: number;
+  project_path?: string;
+}
+
+export interface RecallRelevantResponse {
+  success: boolean;
+  items: MemoryItemWithSimilarity[];
+  total_found?: number;
+  message: string;
+}
+
+export interface ListMemoryArgs {
+  tags?: string[];
+  limit?: number;
+  offset?: number;
+  project_path?: string;
+}
+
+export interface ListMemoryResponse {
+  success: boolean;
+  items: MemoryItem[];
+  total_count: number;
+  has_more: boolean;
+  offset: number;
+  message: string;
+}
+
+export interface ForgetArgs {
+  key: string;
+  project_path?: string;
+}
+
+export interface ForgetResponse {
+  success: boolean;
+  message: string;
+}
+
+// Session Handoff Types
+
+export interface PrepareHandoffArgs {
+  session_id?: string;
+  include?: Array<"decisions" | "files" | "tasks" | "memory">;
+  context_summary?: string;
+  project_path?: string;
+}
+
+export interface HandoffSummary {
+  id: string;
+  from_session_id: string;
+  project_path: string;
+  created_at: string;
+  summary: string;
+  decisions_count: number;
+  files_count: number;
+  tasks_count: number;
+  memory_count: number;
+}
+
+export interface HandoffDocument {
+  id: string;
+  from_session_id: string;
+  project_path: string;
+  created_at: string;
+  summary: string;
+  decisions: Array<{
+    text: string;
+    rationale?: string;
+    timestamp: string;
+  }>;
+  active_files: Array<{
+    path: string;
+    last_action: string;
+  }>;
+  pending_tasks: Array<{
+    description: string;
+    status: string;
+  }>;
+  memory_items: Array<{
+    key: string;
+    value: string;
+  }>;
+}
+
+export interface PrepareHandoffResponse {
+  success: boolean;
+  handoff?: HandoffSummary;
+  message: string;
+}
+
+export interface ResumeFromHandoffArgs {
+  handoff_id?: string;
+  new_session_id?: string;
+  inject_context?: boolean;
+  project_path?: string;
+}
+
+export interface ResumeFromHandoffResponse {
+  success: boolean;
+  found: boolean;
+  handoff?: HandoffDocument;
+  message: string;
+}
+
+export interface ListHandoffsArgs {
+  limit?: number;
+  include_resumed?: boolean;
+  project_path?: string;
+}
+
+export interface ListHandoffsResponse {
+  success: boolean;
+  handoffs: Array<{
+    id: string;
+    from_session_id: string;
+    created_at: string;
+    resumed_by?: string;
+    resumed_at?: string;
+    summary: string;
+  }>;
+  total_count: number;
+  message: string;
+}
+
+// Context Injection Types
+
+export interface GetStartupContextArgs {
+  query?: string;
+  max_tokens?: number;
+  sources?: Array<"history" | "decisions" | "memory" | "handoffs">;
+  project_path?: string;
+}
+
+export interface GetStartupContextResponse {
+  success: boolean;
+  context: {
+    handoff?: HandoffDocument;
+    decisions: Array<{
+      id: string;
+      text: string;
+      rationale?: string;
+      timestamp: string;
+    }>;
+    memory: MemoryItem[];
+    recent_files: Array<{
+      path: string;
+      last_action: string;
+      timestamp: string;
+    }>;
+    summary: string;
+  };
+  token_estimate: number;
+  message: string;
+}
+
+export interface InjectRelevantContextArgs {
+  message: string;
+  max_tokens?: number;
+  sources?: Array<"history" | "decisions" | "memory" | "handoffs">;
+  project_path?: string;
+}
+
+export interface InjectRelevantContextResponse {
+  success: boolean;
+  injected_context: string;
+  sources_used: string[];
+  token_count: number;
+  message: string;
+}

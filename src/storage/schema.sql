@@ -364,3 +364,73 @@ CREATE TABLE IF NOT EXISTS project_metadata (
 CREATE INDEX IF NOT EXISTS idx_proj_source ON project_metadata(source_type);
 CREATE INDEX IF NOT EXISTS idx_proj_last_indexed ON project_metadata(last_indexed);
 CREATE INDEX IF NOT EXISTS idx_proj_path ON project_metadata(project_path);
+
+-- ==================================================
+-- LIVE CONTEXT LAYER TABLES
+-- ==================================================
+
+-- Table 19: Working Memory (Key-value store for facts/context)
+CREATE TABLE IF NOT EXISTS working_memory (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  context TEXT,
+  tags TEXT,                          -- JSON array
+  session_id TEXT,
+  project_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  embedding BLOB,
+  UNIQUE(project_path, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wm_session ON working_memory(session_id);
+CREATE INDEX IF NOT EXISTS idx_wm_project ON working_memory(project_path);
+CREATE INDEX IF NOT EXISTS idx_wm_expires ON working_memory(expires_at);
+CREATE INDEX IF NOT EXISTS idx_wm_key ON working_memory(key);
+CREATE INDEX IF NOT EXISTS idx_wm_project_key ON working_memory(project_path, key);
+
+-- Table 20: Session Handoffs (Context transfer between conversations)
+CREATE TABLE IF NOT EXISTS session_handoffs (
+  id TEXT PRIMARY KEY,
+  from_session_id TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  handoff_data TEXT NOT NULL,         -- JSON with decisions, files, tasks, memory
+  resumed_by_session_id TEXT,
+  resumed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_handoff_session ON session_handoffs(from_session_id);
+CREATE INDEX IF NOT EXISTS idx_handoff_project ON session_handoffs(project_path);
+CREATE INDEX IF NOT EXISTS idx_handoff_created ON session_handoffs(created_at);
+CREATE INDEX IF NOT EXISTS idx_handoff_resumed ON session_handoffs(resumed_by_session_id);
+
+-- Table 21: Session Checkpoints (Real-time progress tracking)
+CREATE TABLE IF NOT EXISTS session_checkpoints (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  checkpoint_number INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  decisions TEXT,                     -- JSON array
+  active_files TEXT,                  -- JSON array
+  task_state TEXT,                    -- JSON
+  context_summary TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_checkpoint_session ON session_checkpoints(session_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_project ON session_checkpoints(project_path);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_created ON session_checkpoints(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoint_session_num ON session_checkpoints(session_id, checkpoint_number);
+
+-- Table 22: Full-Text Search Index for Working Memory
+CREATE VIRTUAL TABLE IF NOT EXISTS working_memory_fts USING fts5(
+  id UNINDEXED,
+  key,
+  value,
+  context,
+  content=working_memory,
+  content_rowid=rowid
+);

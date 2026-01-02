@@ -95,6 +95,81 @@ export const migrations: Migration[] = [
       DROP TABLE IF EXISTS mistake_embeddings
     `,
   },
+  {
+    version: 5,
+    description:
+      "Add live context layer tables: working_memory, session_handoffs, session_checkpoints",
+    up: `
+      -- Working Memory table for key-value context storage
+      CREATE TABLE IF NOT EXISTS working_memory (
+        id TEXT PRIMARY KEY,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        context TEXT,
+        tags TEXT,
+        session_id TEXT,
+        project_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        embedding BLOB,
+        UNIQUE(project_path, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wm_session ON working_memory(session_id);
+      CREATE INDEX IF NOT EXISTS idx_wm_project ON working_memory(project_path);
+      CREATE INDEX IF NOT EXISTS idx_wm_expires ON working_memory(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_wm_key ON working_memory(key);
+      CREATE INDEX IF NOT EXISTS idx_wm_project_key ON working_memory(project_path, key);
+
+      -- Session Handoffs table for context transfer
+      CREATE TABLE IF NOT EXISTS session_handoffs (
+        id TEXT PRIMARY KEY,
+        from_session_id TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        handoff_data TEXT NOT NULL,
+        resumed_by_session_id TEXT,
+        resumed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_handoff_session ON session_handoffs(from_session_id);
+      CREATE INDEX IF NOT EXISTS idx_handoff_project ON session_handoffs(project_path);
+      CREATE INDEX IF NOT EXISTS idx_handoff_created ON session_handoffs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_handoff_resumed ON session_handoffs(resumed_by_session_id);
+
+      -- Session Checkpoints table for real-time tracking
+      CREATE TABLE IF NOT EXISTS session_checkpoints (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        checkpoint_number INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        decisions TEXT,
+        active_files TEXT,
+        task_state TEXT,
+        context_summary TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_checkpoint_session ON session_checkpoints(session_id);
+      CREATE INDEX IF NOT EXISTS idx_checkpoint_project ON session_checkpoints(project_path);
+      CREATE INDEX IF NOT EXISTS idx_checkpoint_created ON session_checkpoints(created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoint_session_num ON session_checkpoints(session_id, checkpoint_number);
+
+      -- FTS for working memory
+      CREATE VIRTUAL TABLE IF NOT EXISTS working_memory_fts USING fts5(
+        id UNINDEXED,
+        key,
+        value,
+        context,
+        content=working_memory,
+        content_rowid=rowid
+      )
+    `,
+    down: `
+      DROP TABLE IF EXISTS working_memory_fts;
+      DROP TABLE IF EXISTS session_checkpoints;
+      DROP TABLE IF EXISTS session_handoffs;
+      DROP TABLE IF EXISTS working_memory
+    `,
+  },
 ];
 
 export class MigrationManager {
