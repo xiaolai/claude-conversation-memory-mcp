@@ -154,6 +154,15 @@ export class SQLiteManager {
         )
       `);
 
+      // Create mistake embeddings virtual table
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_mistake_embeddings
+        USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding float[${dimensions}]
+        )
+      `);
+
       console.error(`✓ sqlite-vec virtual tables created (${dimensions} dimensions)`);
     } catch (error) {
       console.error("⚠️ Failed to create vec virtual tables:", (error as Error).message);

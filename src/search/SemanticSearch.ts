@@ -8,6 +8,7 @@ import { VectorStore } from "../embeddings/VectorStore.js";
 import { getEmbeddingGenerator, EmbeddingGenerator } from "../embeddings/EmbeddingGenerator.js";
 import type { Message, Conversation } from "../parsers/ConversationParser.js";
 import type { Decision } from "../parsers/DecisionExtractor.js";
+import type { Mistake } from "../parsers/MistakeExtractor.js";
 import type { MessageRow, DecisionRow, ConversationRow } from "../types/ToolTypes.js";
 import { safeJsonParse } from "../utils/safeJson.js";
 
@@ -26,6 +27,12 @@ export interface SearchResult {
 
 export interface DecisionSearchResult {
   decision: Decision;
+  conversation: Conversation;
+  similarity: number;
+}
+
+export interface MistakeSearchResult {
+  mistake: Mistake;
   conversation: Conversation;
   similarity: number;
 }
@@ -207,6 +214,231 @@ export class SemanticSearch {
   }
 
   /**
+   * Index mistakes for semantic search
+   * @param mistakes - Mistakes to index
+   * @param incremental - If true, skip mistakes that already have embeddings (default: true)
+   */
+  async indexMistakes(mistakes: Mistake[], incremental: boolean = true): Promise<void> {
+    console.error(`Indexing ${mistakes.length} mistakes...`);
+
+    const embedder = await getEmbeddingGenerator();
+
+    if (!embedder.isAvailable()) {
+      console.error("Embeddings not available - skipping mistake indexing");
+      return;
+    }
+
+    // In incremental mode, skip mistakes that already have embeddings
+    let mistakesToIndex = mistakes;
+    if (incremental) {
+      const existingIds = this.vectorStore.getExistingMistakeEmbeddingIds();
+      mistakesToIndex = mistakes.filter((m) => !existingIds.has(m.id));
+
+      if (mistakesToIndex.length === 0) {
+        console.error(`⏭ All ${mistakes.length} mistakes already have embeddings`);
+        return;
+      }
+
+      if (existingIds.size > 0) {
+        console.error(`⏭ Skipping ${mistakes.length - mistakesToIndex.length} already-embedded mistakes`);
+      }
+    }
+    console.error(`Generating embeddings for ${mistakesToIndex.length} ${incremental ? "new " : ""}mistakes...`);
+
+    // Generate embeddings for mistake text + correction
+    const texts = mistakesToIndex.map((m) => {
+      const parts = [m.what_went_wrong];
+      if (m.correction) {parts.push(m.correction);}
+      if (m.mistake_type) {parts.push(m.mistake_type);}
+      return parts.join(" ");
+    });
+
+    const embeddings = await embedder.embedBatch(texts, 32);
+
+    // Store embeddings
+    for (let i = 0; i < mistakesToIndex.length; i++) {
+      await this.vectorStore.storeMistakeEmbedding(
+        mistakesToIndex[i].id,
+        embeddings[i]
+      );
+    }
+
+    console.error("✓ Mistake indexing complete");
+  }
+
+  /**
+   * Index all mistakes in the database that don't have embeddings.
+   * This catches mistakes that were stored before embeddings were available.
+   */
+  async indexMissingMistakeEmbeddings(): Promise<number> {
+    const embedder = await getEmbeddingGenerator();
+
+    if (!embedder.isAvailable()) {
+      console.error("Embeddings not available - skipping missing mistake indexing");
+      return 0;
+    }
+
+    // Get mistakes without embeddings
+    const existingIds = this.vectorStore.getExistingMistakeEmbeddingIds();
+
+    interface MistakeRow {
+      id: string;
+      what_went_wrong: string;
+      correction: string | null;
+      mistake_type: string;
+    }
+
+    const allMistakes = this.db
+      .prepare("SELECT id, what_went_wrong, correction, mistake_type FROM mistakes")
+      .all() as MistakeRow[];
+
+    const missingMistakes = allMistakes.filter((m) => !existingIds.has(m.id));
+
+    if (missingMistakes.length === 0) {
+      return 0;
+    }
+
+    console.error(`Generating embeddings for ${missingMistakes.length} mistakes missing embeddings...`);
+
+    // Generate embeddings for mistake text + correction
+    const texts = missingMistakes.map((m) => {
+      const parts = [m.what_went_wrong];
+      if (m.correction) {parts.push(m.correction);}
+      if (m.mistake_type) {parts.push(m.mistake_type);}
+      return parts.join(" ");
+    });
+
+    const embeddings = await embedder.embedBatch(texts, 32);
+
+    // Store embeddings
+    for (let i = 0; i < missingMistakes.length; i++) {
+      await this.vectorStore.storeMistakeEmbedding(
+        missingMistakes[i].id,
+        embeddings[i]
+      );
+    }
+
+    console.error(`✓ Generated ${missingMistakes.length} missing mistake embeddings`);
+    return missingMistakes.length;
+  }
+
+  /**
+   * Search for mistakes using semantic search
+   */
+  async searchMistakes(
+    query: string,
+    limit: number = 10
+  ): Promise<MistakeSearchResult[]> {
+    const embedder = await getEmbeddingGenerator();
+
+    if (!embedder.isAvailable()) {
+      console.error("Embeddings not available - using text search");
+      return this.fallbackMistakeSearch(query, limit);
+    }
+
+    // Generate query embedding
+    const queryEmbedding = await embedder.embed(query);
+
+    try {
+      // Use vec_distance_cosine for efficient ANN search with JOINs
+      // Note: Must include byteOffset/byteLength in case Float32Array is a view
+      const queryBuffer = Buffer.from(queryEmbedding.buffer, queryEmbedding.byteOffset, queryEmbedding.byteLength);
+
+      const rows = this.db
+        .prepare(
+          `SELECT
+            vec.id as vec_id,
+            vec_distance_cosine(vec.embedding, ?) as distance,
+            m.id,
+            m.conversation_id,
+            m.message_id,
+            m.mistake_type,
+            m.what_went_wrong,
+            m.correction,
+            m.user_correction_message,
+            m.files_affected,
+            m.timestamp,
+            c.id as conv_id,
+            c.project_path,
+            c.first_message_at,
+            c.last_message_at,
+            c.message_count,
+            c.git_branch,
+            c.claude_version,
+            c.metadata as conv_metadata,
+            c.created_at as conv_created_at,
+            c.updated_at as conv_updated_at
+          FROM vec_mistake_embeddings vec
+          JOIN mistake_embeddings me ON vec.id = me.id
+          JOIN mistakes m ON me.mistake_id = m.id
+          JOIN conversations c ON m.conversation_id = c.id
+          ORDER BY distance
+          LIMIT ?`
+        )
+        .all(queryBuffer, limit) as Array<{
+        vec_id: string;
+        distance: number;
+        id: string;
+        conversation_id: string;
+        message_id: string;
+        mistake_type: string;
+        what_went_wrong: string;
+        correction: string | null;
+        user_correction_message: string | null;
+        files_affected: string;
+        timestamp: number;
+        conv_id: string;
+        project_path: string;
+        first_message_at: number;
+        last_message_at: number;
+        message_count: number;
+        git_branch: string;
+        claude_version: string;
+        conv_metadata: string;
+        conv_created_at: number;
+        conv_updated_at: number;
+      }>;
+
+      // Fall back to FTS if vector search returned no results
+      if (rows.length === 0) {
+        console.error("Vector search returned no mistake results - falling back to FTS");
+        return this.fallbackMistakeSearch(query, limit);
+      }
+
+      return rows.map((row) => ({
+        mistake: {
+          id: row.id,
+          conversation_id: row.conversation_id,
+          message_id: row.message_id,
+          mistake_type: row.mistake_type as Mistake["mistake_type"],
+          what_went_wrong: row.what_went_wrong,
+          correction: row.correction || undefined,
+          user_correction_message: row.user_correction_message || undefined,
+          files_affected: safeJsonParse<string[]>(row.files_affected, []),
+          timestamp: row.timestamp,
+        },
+        conversation: {
+          id: row.conv_id,
+          project_path: row.project_path,
+          first_message_at: row.first_message_at,
+          last_message_at: row.last_message_at,
+          message_count: row.message_count,
+          git_branch: row.git_branch,
+          claude_version: row.claude_version,
+          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+          created_at: row.conv_created_at,
+          updated_at: row.conv_updated_at,
+        },
+        similarity: 1 - row.distance, // Convert distance to similarity
+      }));
+    } catch (error) {
+      // Fallback to text search if vec search fails
+      console.error("Vec mistake search failed, falling back to text search:", (error as Error).message);
+      return this.fallbackMistakeSearch(query, limit);
+    }
+  }
+
+  /**
    * Search conversations using natural language query
    */
   async searchConversations(
@@ -289,7 +521,8 @@ export class SemanticSearch {
 
     try {
       // Use vec_distance_cosine for efficient ANN search with JOINs to avoid N+1 queries
-      const queryBuffer = Buffer.from(queryEmbedding.buffer);
+      // Note: Must include byteOffset/byteLength in case Float32Array is a view
+      const queryBuffer = Buffer.from(queryEmbedding.buffer, queryEmbedding.byteOffset, queryEmbedding.byteLength);
 
       const rows = this.db
         .prepare(
@@ -427,49 +660,6 @@ export class SemanticSearch {
     // Sanitize the query for FTS5 syntax
     const ftsQuery = this.sanitizeFtsQuery(query);
 
-    // Select all needed conversation columns to avoid N+1 queries
-    let sql = `
-      SELECT m.*,
-        c.id as conv_id,
-        c.project_path,
-        c.first_message_at,
-        c.last_message_at,
-        c.message_count as conv_message_count,
-        c.git_branch,
-        c.claude_version,
-        c.metadata as conv_metadata,
-        c.created_at as conv_created_at,
-        c.updated_at as conv_updated_at
-      FROM messages m
-      JOIN conversations c ON m.conversation_id = c.id
-      WHERE m.id IN (
-        SELECT id FROM messages_fts WHERE messages_fts MATCH ?
-      )
-    `;
-
-    const params: (string | number)[] = [ftsQuery];
-
-    // Apply filters
-    if (filter) {
-      if (filter.date_range) {
-        sql += " AND m.timestamp BETWEEN ? AND ?";
-        params.push(filter.date_range[0], filter.date_range[1]);
-      }
-
-      if (filter.message_type && filter.message_type.length > 0) {
-        sql += ` AND m.message_type IN (${filter.message_type.map(() => "?").join(",")})`;
-        params.push(...filter.message_type);
-      }
-
-      if (filter.conversation_id) {
-        sql += " AND m.conversation_id = ?";
-        params.push(filter.conversation_id);
-      }
-    }
-
-    sql += " ORDER BY m.timestamp DESC LIMIT ?";
-    params.push(limit);
-
     interface JoinedRow extends MessageRow {
       conv_id: string;
       project_path: string;
@@ -483,10 +673,7 @@ export class SemanticSearch {
       conv_updated_at: number;
     }
 
-    const rows = this.db.prepare(sql).all(...params) as JoinedRow[];
-
-    return rows.map((row) => {
-      // Build conversation from joined data - no separate query needed
+    const mapRowToResult = (row: JoinedRow): SearchResult => {
       const conversation = {
         id: row.conv_id,
         project_path: row.project_path,
@@ -507,10 +694,105 @@ export class SemanticSearch {
           is_sidechain: Boolean(row.is_sidechain),
         } as Message,
         conversation,
-        similarity: 0.5, // Default similarity for FTS
+        similarity: 0.5, // Default similarity for FTS/LIKE
         snippet: this.generateSnippet(row.content || "", query),
       };
-    });
+    };
+
+    // Try FTS first, fall back to LIKE if FTS fails
+    try {
+      let sql = `
+        SELECT m.*,
+          c.id as conv_id,
+          c.project_path,
+          c.first_message_at,
+          c.last_message_at,
+          c.message_count as conv_message_count,
+          c.git_branch,
+          c.claude_version,
+          c.metadata as conv_metadata,
+          c.created_at as conv_created_at,
+          c.updated_at as conv_updated_at
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE m.id IN (
+          SELECT id FROM messages_fts WHERE messages_fts MATCH ?
+        )
+      `;
+
+      const params: (string | number)[] = [ftsQuery];
+
+      // Apply filters
+      if (filter) {
+        if (filter.date_range) {
+          sql += " AND m.timestamp BETWEEN ? AND ?";
+          params.push(filter.date_range[0], filter.date_range[1]);
+        }
+
+        if (filter.message_type && filter.message_type.length > 0) {
+          sql += ` AND m.message_type IN (${filter.message_type.map(() => "?").join(",")})`;
+          params.push(...filter.message_type);
+        }
+
+        if (filter.conversation_id) {
+          sql += " AND m.conversation_id = ?";
+          params.push(filter.conversation_id);
+        }
+      }
+
+      sql += " ORDER BY m.timestamp DESC LIMIT ?";
+      params.push(limit);
+
+      const rows = this.db.prepare(sql).all(...params) as JoinedRow[];
+      return rows.map(mapRowToResult);
+    } catch (_e) {
+      // FTS table may not exist or be corrupted, fall back to LIKE search
+      console.error("Messages FTS not available, using LIKE search");
+
+      let sql = `
+        SELECT m.*,
+          c.id as conv_id,
+          c.project_path,
+          c.first_message_at,
+          c.last_message_at,
+          c.message_count as conv_message_count,
+          c.git_branch,
+          c.claude_version,
+          c.metadata as conv_metadata,
+          c.created_at as conv_created_at,
+          c.updated_at as conv_updated_at
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE m.content LIKE ?
+      `;
+
+      const likeQuery = `%${query}%`;
+      const params: (string | number)[] = [likeQuery];
+
+      // Apply filters
+      if (filter) {
+        if (filter.date_range) {
+          sql += " AND m.timestamp BETWEEN ? AND ?";
+          params.push(filter.date_range[0], filter.date_range[1]);
+        }
+
+        if (filter.message_type && filter.message_type.length > 0) {
+          sql += ` AND m.message_type IN (${filter.message_type.map(() => "?").join(",")})`;
+          params.push(...filter.message_type);
+        }
+
+        if (filter.conversation_id) {
+          sql += " AND m.conversation_id = ?";
+          params.push(filter.conversation_id);
+        }
+      }
+
+      sql += " ORDER BY m.timestamp DESC LIMIT ?";
+      params.push(limit);
+
+      const rows = this.db.prepare(sql).all(...params) as JoinedRow[];
+      return rows.map(mapRowToResult);
+    }
   }
 
   /**
@@ -523,20 +805,7 @@ export class SemanticSearch {
     // Sanitize the query for FTS5 syntax
     const ftsQuery = this.sanitizeFtsQuery(query);
 
-    const sql = `
-      SELECT d.*, c.project_path, c.git_branch
-      FROM decisions d
-      JOIN conversations c ON d.conversation_id = c.id
-      WHERE d.id IN (
-        SELECT id FROM decisions_fts WHERE decisions_fts MATCH ?
-      )
-      ORDER BY d.timestamp DESC
-      LIMIT ?
-    `;
-
-    const rows = this.db.prepare(sql).all(ftsQuery, limit) as DecisionRow[];
-
-    return rows.map((row) => {
+    const mapRowToResult = (row: DecisionRow): DecisionSearchResult => {
       const conversation = this.getConversation(row.conversation_id);
       if (!conversation) {
         console.error(`Warning: Conversation ${row.conversation_id} not found for decision ${row.id}`);
@@ -554,7 +823,186 @@ export class SemanticSearch {
         conversation,
         similarity: 0.5,
       };
-    });
+    };
+
+    // Try FTS first, fall back to LIKE if FTS fails
+    try {
+      const sql = `
+        SELECT d.*, c.project_path, c.git_branch
+        FROM decisions d
+        JOIN conversations c ON d.conversation_id = c.id
+        WHERE d.id IN (
+          SELECT id FROM decisions_fts WHERE decisions_fts MATCH ?
+        )
+        ORDER BY d.timestamp DESC
+        LIMIT ?
+      `;
+
+      const rows = this.db.prepare(sql).all(ftsQuery, limit) as DecisionRow[];
+      return rows.map(mapRowToResult);
+    } catch (_e) {
+      // FTS table may not exist or be corrupted, fall back to LIKE search
+      console.error("Decisions FTS not available, using LIKE search");
+
+      const sql = `
+        SELECT d.*, c.project_path, c.git_branch
+        FROM decisions d
+        JOIN conversations c ON d.conversation_id = c.id
+        WHERE d.decision_text LIKE ? OR d.rationale LIKE ? OR d.context LIKE ?
+        ORDER BY d.timestamp DESC
+        LIMIT ?
+      `;
+
+      const likeQuery = `%${query}%`;
+      const rows = this.db.prepare(sql).all(likeQuery, likeQuery, likeQuery, limit) as DecisionRow[];
+      return rows.map(mapRowToResult);
+    }
+  }
+
+  /**
+   * Fallback mistake search using FTS
+   */
+  private fallbackMistakeSearch(
+    query: string,
+    limit: number
+  ): MistakeSearchResult[] {
+    // Sanitize the query for FTS5 syntax
+    const ftsQuery = this.sanitizeFtsQuery(query);
+
+    // Try FTS first, fall back to LIKE if FTS table doesn't exist
+    try {
+      const sql = `
+        SELECT m.*, c.project_path, c.git_branch,
+          c.id as conv_id, c.first_message_at, c.last_message_at,
+          c.message_count, c.claude_version, c.metadata as conv_metadata,
+          c.created_at as conv_created_at, c.updated_at as conv_updated_at
+        FROM mistakes m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE m.id IN (
+          SELECT id FROM mistakes_fts WHERE mistakes_fts MATCH ?
+        )
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+      `;
+
+      interface MistakeRowWithConv {
+        id: string;
+        conversation_id: string;
+        message_id: string;
+        mistake_type: string;
+        what_went_wrong: string;
+        correction: string | null;
+        user_correction_message: string | null;
+        files_affected: string;
+        timestamp: number;
+        project_path: string;
+        git_branch: string;
+        conv_id: string;
+        first_message_at: number;
+        last_message_at: number;
+        message_count: number;
+        claude_version: string;
+        conv_metadata: string;
+        conv_created_at: number;
+        conv_updated_at: number;
+      }
+
+      const rows = this.db.prepare(sql).all(ftsQuery, limit) as MistakeRowWithConv[];
+
+      return rows.map((row) => ({
+        mistake: {
+          id: row.id,
+          conversation_id: row.conversation_id,
+          message_id: row.message_id,
+          mistake_type: row.mistake_type as Mistake["mistake_type"],
+          what_went_wrong: row.what_went_wrong,
+          correction: row.correction || undefined,
+          user_correction_message: row.user_correction_message || undefined,
+          files_affected: safeJsonParse<string[]>(row.files_affected, []),
+          timestamp: row.timestamp,
+        },
+        conversation: {
+          id: row.conv_id,
+          project_path: row.project_path,
+          first_message_at: row.first_message_at,
+          last_message_at: row.last_message_at,
+          message_count: row.message_count,
+          git_branch: row.git_branch,
+          claude_version: row.claude_version,
+          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+          created_at: row.conv_created_at,
+          updated_at: row.conv_updated_at,
+        },
+        similarity: 0.5,
+      }));
+    } catch (_e) {
+      // FTS table may not exist, fall back to LIKE search
+      console.error("Mistakes FTS not available, using LIKE search");
+
+      const sql = `
+        SELECT m.*, c.project_path, c.git_branch,
+          c.id as conv_id, c.first_message_at, c.last_message_at,
+          c.message_count, c.claude_version, c.metadata as conv_metadata,
+          c.created_at as conv_created_at, c.updated_at as conv_updated_at
+        FROM mistakes m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE m.what_went_wrong LIKE ? OR m.correction LIKE ?
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+      `;
+
+      interface MistakeRowWithConv {
+        id: string;
+        conversation_id: string;
+        message_id: string;
+        mistake_type: string;
+        what_went_wrong: string;
+        correction: string | null;
+        user_correction_message: string | null;
+        files_affected: string;
+        timestamp: number;
+        project_path: string;
+        git_branch: string;
+        conv_id: string;
+        first_message_at: number;
+        last_message_at: number;
+        message_count: number;
+        claude_version: string;
+        conv_metadata: string;
+        conv_created_at: number;
+        conv_updated_at: number;
+      }
+
+      const likeQuery = `%${query}%`;
+      const rows = this.db.prepare(sql).all(likeQuery, likeQuery, limit) as MistakeRowWithConv[];
+
+      return rows.map((row) => ({
+        mistake: {
+          id: row.id,
+          conversation_id: row.conversation_id,
+          message_id: row.message_id,
+          mistake_type: row.mistake_type as Mistake["mistake_type"],
+          what_went_wrong: row.what_went_wrong,
+          correction: row.correction || undefined,
+          user_correction_message: row.user_correction_message || undefined,
+          files_affected: safeJsonParse<string[]>(row.files_affected, []),
+          timestamp: row.timestamp,
+        },
+        conversation: {
+          id: row.conv_id,
+          project_path: row.project_path,
+          first_message_at: row.first_message_at,
+          last_message_at: row.last_message_at,
+          message_count: row.message_count,
+          git_branch: row.git_branch,
+          claude_version: row.claude_version,
+          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+          created_at: row.conv_created_at,
+          updated_at: row.conv_updated_at,
+        },
+        similarity: 0.5,
+      }));
+    }
   }
 
   /**

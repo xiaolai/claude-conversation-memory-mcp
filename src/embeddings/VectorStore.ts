@@ -49,35 +49,42 @@ export class VectorStore {
   }
 
   /**
-   * Get set of message IDs that already have embeddings.
-   * Queries both BLOB fallback table and sqlite-vec table.
+   * Generic helper to get existing embedding IDs from both BLOB and vec tables.
+   * @param blobTable - BLOB table name (e.g., "message_embeddings")
+   * @param idColumn - Column name for the entity ID (e.g., "message_id")
+   * @param vecTable - Vec table name (e.g., "vec_message_embeddings")
+   * @param prefix - ID prefix in vec table (e.g., "msg_")
    */
-  getExistingMessageEmbeddingIds(): Set<string> {
+  private getExistingEmbeddingIds(
+    blobTable: string,
+    idColumn: string,
+    vecTable: string,
+    prefix: string
+  ): Set<string> {
     const ids = new Set<string>();
 
-    // Query BLOB fallback table (always exists)
+    // Query BLOB fallback table
     try {
       const rows = this.db
-        .prepare("SELECT message_id FROM message_embeddings")
-        .all() as Array<{ message_id: string }>;
+        .prepare(`SELECT ${idColumn} FROM ${blobTable}`)
+        .all() as Array<Record<string, string>>;
       for (const row of rows) {
-        ids.add(row.message_id);
+        ids.add(row[idColumn]);
       }
     } catch (_e) {
       // Table might not exist yet
     }
 
     // Also query sqlite-vec table if extension is available
-    // Vec table stores IDs as "msg_<messageId>", so we strip the prefix
     if (this.hasVecExtension) {
       try {
         const vecRows = this.db
-          .prepare("SELECT id FROM vec_message_embeddings")
+          .prepare(`SELECT id FROM ${vecTable}`)
           .all() as Array<{ id: string }>;
         for (const row of vecRows) {
-          // Strip "msg_" prefix to get actual message ID
-          if (row.id.startsWith("msg_")) {
-            ids.add(row.id.substring(4));
+          // Strip prefix to get actual entity ID
+          if (row.id.startsWith(prefix)) {
+            ids.add(row.id.substring(prefix.length));
           }
         }
       } catch (_e) {
@@ -89,43 +96,39 @@ export class VectorStore {
   }
 
   /**
+   * Get set of message IDs that already have embeddings.
+   */
+  getExistingMessageEmbeddingIds(): Set<string> {
+    return this.getExistingEmbeddingIds(
+      "message_embeddings",
+      "message_id",
+      "vec_message_embeddings",
+      "msg_"
+    );
+  }
+
+  /**
    * Get set of decision IDs that already have embeddings.
-   * Queries both BLOB fallback table and sqlite-vec table.
    */
   getExistingDecisionEmbeddingIds(): Set<string> {
-    const ids = new Set<string>();
+    return this.getExistingEmbeddingIds(
+      "decision_embeddings",
+      "decision_id",
+      "vec_decision_embeddings",
+      "dec_"
+    );
+  }
 
-    // Query BLOB fallback table
-    try {
-      const rows = this.db
-        .prepare("SELECT decision_id FROM decision_embeddings")
-        .all() as Array<{ decision_id: string }>;
-      for (const row of rows) {
-        ids.add(row.decision_id);
-      }
-    } catch (_e) {
-      // Table might not exist yet
-    }
-
-    // Also query sqlite-vec table if extension is available
-    // Vec table stores IDs as "dec_<decisionId>", so we strip the prefix
-    if (this.hasVecExtension) {
-      try {
-        const vecRows = this.db
-          .prepare("SELECT id FROM vec_decision_embeddings")
-          .all() as Array<{ id: string }>;
-        for (const row of vecRows) {
-          // Strip "dec_" prefix to get actual decision ID
-          if (row.id.startsWith("dec_")) {
-            ids.add(row.id.substring(4));
-          }
-        }
-      } catch (_e) {
-        // Vec table might not exist yet
-      }
-    }
-
-    return ids;
+  /**
+   * Get set of mistake IDs that already have embeddings.
+   */
+  getExistingMistakeEmbeddingIds(): Set<string> {
+    return this.getExistingEmbeddingIds(
+      "mistake_embeddings",
+      "mistake_id",
+      "vec_mistake_embeddings",
+      "mst_"
+    );
   }
 
   /**
@@ -229,28 +232,99 @@ export class VectorStore {
   }
 
   /**
+   * Generic helper to store embeddings for decisions/mistakes (simpler schema without content).
+   * @param entityId - The entity ID (decision or mistake)
+   * @param embedding - The embedding vector
+   * @param blobTable - BLOB table name (e.g., "decision_embeddings")
+   * @param idColumn - Column name for entity ID (e.g., "decision_id")
+   * @param vecTable - Vec table name (e.g., "vec_decision_embeddings")
+   * @param prefix - ID prefix (e.g., "dec_")
+   * @param entityType - For logging (e.g., "decision")
+   */
+  private storeEntityEmbedding(
+    entityId: string,
+    embedding: Float32Array,
+    blobTable: string,
+    idColumn: string,
+    vecTable: string,
+    prefix: string,
+    entityType: string
+  ): void {
+    const embedId = `${prefix}${entityId}`;
+
+    // Store in BLOB table
+    this.db
+      .prepare(
+        `INSERT INTO ${blobTable}
+         (id, ${idColumn}, embedding, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           ${idColumn} = excluded.${idColumn},
+           embedding = excluded.embedding,
+           created_at = excluded.created_at`
+      )
+      .run(
+        embedId,
+        entityId,
+        this.float32ArrayToBuffer(embedding),
+        Date.now()
+      );
+
+    // Also store in sqlite-vec if available
+    if (this.hasVecExtension) {
+      try {
+        this.ensureVecTables(embedding.length);
+        try {
+          this.db.prepare(`DELETE FROM ${vecTable} WHERE id = ?`).run(embedId);
+        } catch (_e) {
+          // Ignore - entry might not exist
+        }
+        this.db
+          .prepare(`INSERT INTO ${vecTable} (id, embedding) VALUES (?, ?)`)
+          .run(embedId, this.float32ArrayToBuffer(embedding));
+      } catch (error) {
+        const errorMessage = (error as Error).message;
+        if (!errorMessage.includes("UNIQUE constraint")) {
+          console.error(`Vec ${entityType} embedding storage failed:`, errorMessage);
+        }
+      }
+    }
+  }
+
+  /**
    * Store an embedding for a decision
    */
   async storeDecisionEmbedding(
     decisionId: string,
     embedding: Float32Array
   ): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT INTO decision_embeddings
-         (id, decision_id, embedding, created_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           decision_id = excluded.decision_id,
-           embedding = excluded.embedding,
-           created_at = excluded.created_at`
-      )
-      .run(
-        `dec_${decisionId}`,
-        decisionId,
-        this.float32ArrayToBuffer(embedding),
-        Date.now()
-      );
+    this.storeEntityEmbedding(
+      decisionId,
+      embedding,
+      "decision_embeddings",
+      "decision_id",
+      "vec_decision_embeddings",
+      "dec_",
+      "decision"
+    );
+  }
+
+  /**
+   * Store an embedding for a mistake
+   */
+  async storeMistakeEmbedding(
+    mistakeId: string,
+    embedding: Float32Array
+  ): Promise<void> {
+    this.storeEntityEmbedding(
+      mistakeId,
+      embedding,
+      "mistake_embeddings",
+      "mistake_id",
+      "vec_mistake_embeddings",
+      "mst_",
+      "mistake"
+    );
   }
 
   /**
@@ -407,6 +481,11 @@ export class VectorStore {
   clearAllEmbeddings(): void {
     this.db.exec("DELETE FROM message_embeddings");
     this.db.exec("DELETE FROM decision_embeddings");
+    try {
+      this.db.exec("DELETE FROM mistake_embeddings");
+    } catch (_e) {
+      // Table might not exist yet
+    }
 
     if (this.hasVecExtension) {
       try {
@@ -416,6 +495,11 @@ export class VectorStore {
       }
       try {
         this.db.exec("DELETE FROM vec_decision_embeddings");
+      } catch (_e) {
+        // Vector table might not exist
+      }
+      try {
+        this.db.exec("DELETE FROM vec_mistake_embeddings");
       } catch (_e) {
         // Vector table might not exist
       }

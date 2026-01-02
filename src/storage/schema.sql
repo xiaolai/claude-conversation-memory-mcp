@@ -274,7 +274,18 @@ CREATE TABLE IF NOT EXISTS decision_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_dec_embed ON decision_embeddings(decision_id);
 
--- Table 16: Full-Text Search Index for Messages
+-- Table 16: Mistake Embeddings (for semantic search of mistakes)
+CREATE TABLE IF NOT EXISTS mistake_embeddings (
+  id TEXT PRIMARY KEY,
+  mistake_id TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mistake_embed ON mistake_embeddings(mistake_id);
+
+-- Table 17: Full-Text Search Index for Messages
 -- NOTE: Column names must match the messages table exactly for external content mode
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   id UNINDEXED,
@@ -284,13 +295,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   content_rowid=rowid
 );
 
--- Table 17: Full-Text Search Index for Decisions
+-- Table 18: Full-Text Search Index for Decisions
 CREATE VIRTUAL TABLE IF NOT EXISTS decisions_fts USING fts5(
   id UNINDEXED,
   decision_text,
   rationale,
   context,
   content=decisions,
+  content_rowid=rowid
+);
+
+-- Table 19: Full-Text Search Index for Mistakes
+CREATE VIRTUAL TABLE IF NOT EXISTS mistakes_fts USING fts5(
+  id UNINDEXED,
+  what_went_wrong,
+  correction,
+  mistake_type,
+  content=mistakes,
   content_rowid=rowid
 );
 

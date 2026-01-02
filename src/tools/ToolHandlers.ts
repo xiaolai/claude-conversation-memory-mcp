@@ -35,11 +35,6 @@ import { readdirSync } from "fs";
 import { join, resolve } from "path";
 import { safeJsonParse } from "../utils/safeJson.js";
 
-/**
- * Default similarity score used when semantic search is not available.
- * This applies to SQL-based searches where semantic embeddings are not used.
- */
-const DEFAULT_SIMILARITY_SCORE = 1.0;
 
 /**
  * Pagination Patterns:
@@ -249,9 +244,11 @@ export class ToolHandlers {
           const semanticSearch = new SemanticSearch(projectDb);
           await semanticSearch.indexMessages(parseResult.messages);
           await semanticSearch.indexDecisions(decisions);
-          // Also index any decisions in DB that are missing embeddings
-          // (catches decisions created before embeddings were available)
+          await semanticSearch.indexMistakes(mistakes);
+          // Also index any decisions/mistakes in DB that are missing embeddings
+          // (catches items created before embeddings were available)
           await semanticSearch.indexMissingDecisionEmbeddings();
+          await semanticSearch.indexMissingMistakeEmbeddings();
           console.error(`✓ Generated embeddings for project: ${projectPath}`);
         } catch (embedError) {
           embeddingError = (embedError as Error).message;
@@ -1002,6 +999,58 @@ export class ToolHandlers {
       };
     }
 
+    // Try semantic search first for better results
+    try {
+      const { SemanticSearch } = await import("../search/SemanticSearch.js");
+      const semanticSearch = new SemanticSearch(this.db);
+      // Fetch more than needed to allow for filtering and pagination
+      const semanticResults = await semanticSearch.searchMistakes(query, limit + offset + 10);
+
+      // Apply additional filters
+      let filtered = semanticResults;
+
+      if (mistake_type) {
+        filtered = filtered.filter(r => r.mistake.mistake_type === mistake_type);
+      }
+
+      if (scope === 'current') {
+        if (!conversation_id) {
+          throw new Error("conversation_id is required when scope='current'");
+        }
+        filtered = filtered.filter(r => r.mistake.conversation_id === conversation_id);
+      }
+
+      // Apply pagination
+      const paginated = filtered.slice(offset, offset + limit + 1);
+      const hasMore = paginated.length > limit;
+      const results = hasMore ? paginated.slice(0, limit) : paginated;
+
+      if (results.length > 0) {
+        return {
+          query,
+          mistake_type,
+          mistakes: results.map(r => ({
+            mistake_id: r.mistake.id,
+            mistake_type: r.mistake.mistake_type,
+            what_went_wrong: r.mistake.what_went_wrong,
+            correction: r.mistake.correction,
+            user_correction_message: r.mistake.user_correction_message,
+            files_affected: r.mistake.files_affected,
+            timestamp: new Date(r.mistake.timestamp).toISOString(),
+          })),
+          total_found: results.length,
+          has_more: hasMore,
+          offset,
+          scope,
+        };
+      }
+      // Fall through to LIKE search if semantic returned no results
+    } catch (_e) {
+      // Semantic search failed, fall back to LIKE search
+      console.error("Semantic mistake search failed, using LIKE fallback");
+    }
+
+    // Fallback to LIKE search
     const sanitized = sanitizeForLike(query);
     let sql = "SELECT * FROM mistakes WHERE what_went_wrong LIKE ? ESCAPE '\\'";
     const params: (string | number)[] = [`%${sanitized}%`];
@@ -1483,7 +1532,7 @@ export class ToolHandlers {
         description: d.decision_text,
         rationale: d.rationale || undefined,
         alternatives: d.alternatives_considered,
-        rejected_approaches: Object.values(d.rejected_reasons),
+        rejected_approaches: Object.values(d.rejected_reasons ?? {}),
         affects_components: d.related_files,
         timestamp: d.timestamp,
       }));
@@ -2740,6 +2789,7 @@ export class ToolHandlers {
     await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+    const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const typedArgs = args as unknown as Types.GetAllDecisionsArgs;
     const { query, file_path, limit = 20, offset = 0, source_type = 'all' } = typedArgs;
 
@@ -2756,33 +2806,28 @@ export class ToolHandlers {
         let projectDb: SQLiteManager | null = null;
         try {
           projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
+          const semanticSearch = new SemanticSearch(projectDb);
 
-          const sanitized = sanitizeForLike(query);
-          let sql = "SELECT * FROM decisions WHERE decision_text LIKE ? ESCAPE '\\\\'";
-          const params: (string | number)[] = [`%${sanitized}%`];
+          // Use semantic search for better results
+          const searchResults = await semanticSearch.searchDecisions(query, limit + offset);
 
-          if (file_path) {
-            sql += " AND related_files LIKE ?";
-            params.push(`%${file_path}%`);
-          }
+          // Filter by file_path if specified
+          const filteredResults = file_path
+            ? searchResults.filter(r => r.decision.related_files.includes(file_path))
+            : searchResults;
 
-          sql += " ORDER BY timestamp DESC LIMIT ?";
-          params.push(limit + offset + 1);
-
-          const decisions = projectDb.prepare(sql).all(...params) as Types.DecisionRow[];
-
-          for (const d of decisions) {
+          for (const r of filteredResults) {
             allDecisions.push({
-              decision_id: d.id,
-              decision_text: d.decision_text,
-              rationale: d.rationale,
-              alternatives_considered: safeJsonParse<string[]>(d.alternatives_considered, []),
-              rejected_reasons: safeJsonParse<Record<string, string>>(d.rejected_reasons, {}),
-              context: d.context,
-              related_files: safeJsonParse<string[]>(d.related_files, []),
-              related_commits: safeJsonParse<string[]>(d.related_commits, []),
-              timestamp: new Date(d.timestamp).toISOString(),
-              similarity: DEFAULT_SIMILARITY_SCORE,
+              decision_id: r.decision.id,
+              decision_text: r.decision.decision_text,
+              rationale: r.decision.rationale,
+              alternatives_considered: r.decision.alternatives_considered,
+              rejected_reasons: r.decision.rejected_reasons,
+              context: r.decision.context,
+              related_files: r.decision.related_files,
+              related_commits: r.decision.related_commits,
+              timestamp: new Date(r.decision.timestamp).toISOString(),
+              similarity: r.similarity,
               project_path: project.project_path,
               source_type: project.source_type,
             });
@@ -2796,10 +2841,8 @@ export class ToolHandlers {
         }
       }
 
-      // Sort by timestamp and paginate
-      const sortedDecisions = allDecisions.sort((a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
+      // Sort by similarity (semantic relevance) and paginate
+      const sortedDecisions = allDecisions.sort((a, b) => b.similarity - a.similarity);
       const paginatedDecisions = sortedDecisions.slice(offset, offset + limit);
 
       return {
@@ -2828,6 +2871,7 @@ export class ToolHandlers {
     await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+    const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const typedArgs = args as unknown as Types.SearchAllMistakesArgs;
     const { query, mistake_type, limit = 20, offset = 0, source_type = 'all' } = typedArgs;
 
@@ -2838,38 +2882,38 @@ export class ToolHandlers {
         source_type === "all" ? undefined : source_type
       );
 
-      const allMistakes: Types.GlobalMistake[] = [];
+      interface GlobalMistakeWithSimilarity extends Types.GlobalMistake {
+        similarity: number;
+      }
+
+      const allMistakes: GlobalMistakeWithSimilarity[] = [];
 
       for (const project of projects) {
         let projectDb: SQLiteManager | null = null;
         try {
           projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
+          const semanticSearch = new SemanticSearch(projectDb);
 
-          const sanitized = sanitizeForLike(query);
-          let sql = "SELECT * FROM mistakes WHERE what_went_wrong LIKE ? ESCAPE '\\\\'";
-          const params: (string | number)[] = [`%${sanitized}%`];
+          // Use semantic search for better results
+          const searchResults = await semanticSearch.searchMistakes(query, limit + offset);
 
-          if (mistake_type) {
-            sql += " AND mistake_type = ?";
-            params.push(mistake_type);
-          }
+          // Filter by mistake_type if specified
+          const filteredResults = mistake_type
+            ? searchResults.filter(r => r.mistake.mistake_type === mistake_type)
+            : searchResults;
 
-          sql += " ORDER BY timestamp DESC LIMIT ?";
-          params.push(limit + offset + 1);
-
-          const mistakes = projectDb.prepare(sql).all(...params) as Types.MistakeRow[];
-
-          for (const m of mistakes) {
+          for (const r of filteredResults) {
             allMistakes.push({
-              mistake_id: m.id,
-              mistake_type: m.mistake_type,
-              what_went_wrong: m.what_went_wrong,
-              correction: m.correction,
-              user_correction_message: m.user_correction_message,
-              files_affected: safeJsonParse<string[]>(m.files_affected, []),
-              timestamp: new Date(m.timestamp).toISOString(),
+              mistake_id: r.mistake.id,
+              mistake_type: r.mistake.mistake_type,
+              what_went_wrong: r.mistake.what_went_wrong,
+              correction: r.mistake.correction,
+              user_correction_message: r.mistake.user_correction_message,
+              files_affected: r.mistake.files_affected,
+              timestamp: new Date(r.mistake.timestamp).toISOString(),
               project_path: project.project_path,
               source_type: project.source_type,
+              similarity: r.similarity,
             });
           }
         } catch (_error) {
@@ -2881,20 +2925,21 @@ export class ToolHandlers {
         }
       }
 
-      // Sort by timestamp and paginate
-      const sortedMistakes = allMistakes.sort((a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
+      // Sort by similarity (semantic relevance) and paginate
+      const sortedMistakes = allMistakes.sort((a, b) => b.similarity - a.similarity);
       const paginatedMistakes = sortedMistakes.slice(offset, offset + limit);
+
+      // Remove similarity from results (not in GlobalMistake type)
+      const results: Types.GlobalMistake[] = paginatedMistakes.map(({ similarity: _similarity, ...rest }) => rest);
 
       return {
         query,
-        mistakes: paginatedMistakes,
-        total_found: paginatedMistakes.length,
+        mistakes: results,
+        total_found: results.length,
         has_more: offset + limit < sortedMistakes.length,
         offset,
         projects_searched: projects.length,
-        message: `Found ${paginatedMistakes.length} mistake(s) across ${projects.length} project(s)`,
+        message: `Found ${results.length} mistake(s) across ${projects.length} project(s)`,
       };
     } finally {
       globalIndex.close();
