@@ -2,6 +2,69 @@
 
 An MCP server that gives Claude long-term memory by indexing conversation history with semantic search, decision tracking, and cross-project search.
 
+---
+
+## ⚠️ Breaking Changes in v1.8.0
+
+**This package has been renamed from `claude-conversation-memory-mcp` to `cccmemory`.**
+
+If you were using the old package, follow these migration steps:
+
+### 1. Uninstall the old package
+
+```bash
+npm uninstall -g claude-conversation-memory-mcp
+```
+
+### 2. Install the new package
+
+```bash
+npm install -g cccmemory
+```
+
+### 3. Update your MCP configuration
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "cccmemory": {
+      "command": "npx",
+      "args": ["-y", "cccmemory"]
+    }
+  }
+}
+```
+
+**Claude Code** (`~/.claude.json`):
+```json
+{
+  "mcpServers": {
+    "cccmemory": {
+      "command": "npx",
+      "args": ["-y", "cccmemory"]
+    }
+  }
+}
+```
+
+**Codex** (`~/.codex/config.toml`):
+```toml
+[mcp_servers.cccmemory]
+command = "npx"
+args = ["-y", "cccmemory"]
+```
+
+### 4. Database migration (automatic)
+
+Your conversation history is preserved. The database files are automatically migrated:
+- `.claude-conversations-memory.db` → `.cccmemory.db`
+- `.codex-conversations-memory.db` → `.cccmemory.db`
+
+No manual action required - the migration happens on first run.
+
+---
+
 ## Features
 
 - **Search conversations** - Natural language search across your chat history
