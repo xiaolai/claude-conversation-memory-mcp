@@ -9,7 +9,7 @@ import { homedir } from 'os';
 import { execSync } from 'child_process';
 
 const CLAUDE_CONFIG_PATH = join(homedir(), '.claude.json');
-const SERVER_NAME = 'conversation-memory';
+const SERVER_NAME = 'cccmemory';
 
 export interface McpServerConfig {
   type: string;
@@ -63,16 +63,16 @@ export function getMcpCommand(): string {
   try {
     // Try to find global npm bin
     const npmBin = execSync('npm bin -g', { encoding: 'utf-8' }).trim();
-    const globalPath = join(npmBin, 'claude-conversation-memory-mcp');
+    const globalPath = join(npmBin, 'cccmemory');
 
     if (existsSync(globalPath)) {
-      return 'claude-conversation-memory-mcp';
+      return 'cccmemory';
     }
   } catch (_error) {
     // Fallback to command name
   }
 
-  return 'claude-conversation-memory-mcp';
+  return 'cccmemory';
 }
 
 /**
@@ -167,7 +167,7 @@ export function getMcpStatus(): {
 
   try {
     const npmBin = execSync('npm bin -g', { encoding: 'utf-8' }).trim();
-    commandPath = join(npmBin, 'claude-conversation-memory-mcp');
+    commandPath = join(npmBin, 'cccmemory');
     commandExists = existsSync(commandPath);
   } catch (_error) {
     // Command not found

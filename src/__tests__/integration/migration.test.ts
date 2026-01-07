@@ -50,7 +50,7 @@ describe("Migration Integration", () => {
     });
 
     // Create database with full schema
-    const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
+    const sourceDb = join(sourceFolder, ".cccmemory.db");
     const db = new Database(sourceDb);
     db.exec(`
       CREATE TABLE conversations (
@@ -127,7 +127,7 @@ describe("Migration Integration", () => {
     });
 
     // Verify: Database copied and updated
-    const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+    const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
 
     // Check project_path updated
     const conversations = targetDb.prepare("SELECT * FROM conversations").all() as Array<{id: string; project_path: string}>;
@@ -146,7 +146,7 @@ describe("Migration Integration", () => {
     targetDb.close();
 
     // Verify: Backup created
-    expect(existsSync(join(sourceFolder, ".claude-conversations-memory.db.bak"))).toBe(true);
+    expect(existsSync(join(sourceFolder, ".cccmemory.db.bak"))).toBe(true);
 
     // Verify: Original preserved
     expect(existsSync(join(sourceFolder, "session1.jsonl"))).toBe(true);
@@ -159,7 +159,7 @@ describe("Migration Integration", () => {
 
     writeFileSync(join(legacyFolder, "session.jsonl"), '{}');
 
-    const db = new Database(join(legacyFolder, ".claude-conversations-memory.db"));
+    const db = new Database(join(legacyFolder, ".cccmemory.db"));
     db.exec(`
       CREATE TABLE conversations (id TEXT, project_path TEXT);
       INSERT INTO conversations VALUES ('c1', '/Users/test/my.project.com/old');
@@ -181,7 +181,7 @@ describe("Migration Integration", () => {
 
     writeFileSync(join(sourceFolder, "session.jsonl"), '{}');
 
-    const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+    const db = new Database(join(sourceFolder, ".cccmemory.db"));
     db.exec(`
       CREATE TABLE conversations (id TEXT, project_path TEXT);
       INSERT INTO conversations VALUES ('c1', '/old');
@@ -197,7 +197,7 @@ describe("Migration Integration", () => {
     // Verify: Target created with data
     expect(existsSync(targetFolder)).toBe(true);
     expect(existsSync(join(targetFolder, "session.jsonl"))).toBe(true);
-    expect(existsSync(join(targetFolder, ".claude-conversations-memory.db"))).toBe(true);
+    expect(existsSync(join(targetFolder, ".cccmemory.db"))).toBe(true);
   });
 
   it("should abort on conflicts", async () => {
@@ -210,7 +210,7 @@ describe("Migration Integration", () => {
     writeFileSync(join(sourceFolder, "source.jsonl"), '{}');
     writeFileSync(join(targetFolder, "target.jsonl"), '{}');
 
-    const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+    const db = new Database(join(sourceFolder, ".cccmemory.db"));
     db.exec(`CREATE TABLE conversations (id TEXT);`);
     db.close();
 
@@ -232,7 +232,7 @@ describe("Migration Integration", () => {
     const jsonlContent = '{"type":"user","uuid":"unique123","sessionId":"s1","message":{"role":"user","content":"Test message"}}';
     writeFileSync(join(sourceFolder, "session.jsonl"), jsonlContent);
 
-    const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
+    const sourceDb = join(sourceFolder, ".cccmemory.db");
     const db = new Database(sourceDb);
     db.exec(`
       CREATE TABLE conversations (id TEXT, project_path TEXT, metadata TEXT);
@@ -252,7 +252,7 @@ describe("Migration Integration", () => {
     expect(copiedContent).toBe(jsonlContent);
 
     // Verify: Database content preserved (except project_path)
-    const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+    const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
 
     const conv = targetDb.prepare("SELECT * FROM conversations WHERE id = 'c1'").get() as {
       id: string;

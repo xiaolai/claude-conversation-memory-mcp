@@ -76,7 +76,7 @@ export class ProjectMigration {
 
     for (const folder of folders) {
       const folderPath = join(projectsDir, folder);
-      const dbPath = join(folderPath, ".claude-conversations-memory.db");
+      const dbPath = join(folderPath, ".cccmemory.db");
 
       let storedPath: string | null = null;
       let stats = { conversations: 0, messages: 0, lastActivity: null as number | null };
@@ -182,7 +182,7 @@ export class ProjectMigration {
     }
 
     // Check source database is readable
-    const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
+    const sourceDb = join(sourceFolder, ".cccmemory.db");
     if (existsSync(sourceDb)) {
       try {
         const db = new Database(sourceDb, { readonly: true });
@@ -262,8 +262,8 @@ export class ProjectMigration {
       mkdirSync(targetFolder, { recursive: true });
     }
 
-    const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
-    const targetDb = join(targetFolder, ".claude-conversations-memory.db");
+    const sourceDb = join(sourceFolder, ".cccmemory.db");
+    const targetDb = join(targetFolder, ".cccmemory.db");
 
     // Branch based on mode
     if (mode === "merge") {
@@ -290,7 +290,7 @@ export class ProjectMigration {
 
       if (existsSync(sourceDb)) {
         // Create backup
-        const backupPath = join(sourceFolder, ".claude-conversations-memory.db.bak");
+        const backupPath = join(sourceFolder, ".cccmemory.db.bak");
         copyFileSync(sourceDb, backupPath);
 
         // Copy database
@@ -341,7 +341,7 @@ export class ProjectMigration {
     if (existsSync(sourceDb)) {
       if (existsSync(targetDb)) {
         // Backup target database before merge
-        const backupPath = join(targetFolder, ".claude-conversations-memory.db.bak");
+        const backupPath = join(targetFolder, ".cccmemory.db.bak");
         copyFileSync(targetDb, backupPath);
 
         // Merge source into target

@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Claude Conversation Memory - Main Entry Point
+ * CCCMemory - Main Entry Point
  * Supports both MCP server mode and interactive CLI mode
  */
 
-import { ConversationMemoryServer } from "./mcp-server.js";
-import { ConversationMemoryCLI } from "./cli/index.js";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -24,6 +22,33 @@ function getVersion(): string {
     return packageJson.version;
   } catch (_error) {
     return "unknown";
+  }
+}
+
+function checkNodeAbi(): void {
+  const abiPath = join(__dirname, "..", ".node-abi.json");
+  if (!existsSync(abiPath)) {
+    return;
+  }
+
+  try {
+    const payload = JSON.parse(readFileSync(abiPath, "utf-8"));
+    const expectedModules = String(payload.modules || "");
+    const currentModules = String(process.versions.modules || "");
+
+    if (expectedModules && currentModules && expectedModules !== currentModules) {
+      console.error("❌ Native module ABI mismatch.");
+      console.error(
+        `   This install was built with ABI ${expectedModules} (Node ${payload.nodeVersion || "unknown"}).`
+      );
+      console.error(
+        `   Current runtime ABI is ${currentModules} (Node ${process.versions.node}).`
+      );
+      console.error("   Reinstall with your runtime Node version, or use npx/volta/asdf to pin Node.");
+      process.exit(1);
+    }
+  } catch {
+    // If the file is unreadable, skip ABI checks to avoid blocking startup.
   }
 }
 
@@ -64,16 +89,21 @@ async function main() {
   const mode = detectMode();
   const args = process.argv.slice(2).filter((arg) => arg !== "--server");
 
+  if (mode !== "version") {
+    checkNodeAbi();
+  }
+
   switch (mode) {
     case "version": {
       // Show version
-      console.log(`claude-conversation-memory-mcp v${getVersion()}`);
+      console.log(`cccmemory v${getVersion()}`);
       process.exit(0);
       break;
     }
 
     case "mcp": {
       // MCP Server Mode (for Claude Code CLI integration)
+      const { ConversationMemoryServer } = await import("./mcp-server.js");
       const mcpServer = new ConversationMemoryServer();
       await mcpServer.start();
       break;
@@ -81,6 +111,7 @@ async function main() {
 
     case "single-command": {
       // Single Command Mode
+      const { ConversationMemoryCLI } = await import("./cli/index.js");
       const singleCLI = new ConversationMemoryCLI();
       await singleCLI.runSingleCommand(args.join(" "));
       break;
@@ -89,6 +120,7 @@ async function main() {
     case "cli":
     default: {
       // Interactive REPL Mode
+      const { ConversationMemoryCLI } = await import("./cli/index.js");
       const repl = new ConversationMemoryCLI();
       await repl.start();
       break;

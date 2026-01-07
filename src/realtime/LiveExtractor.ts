@@ -10,6 +10,7 @@ import type { ParsedMessage } from "./IncrementalParser.js";
 import type { RealtimeConfig } from "../memory/types.js";
 import { WorkingMemoryStore } from "../memory/WorkingMemoryStore.js";
 import { dirname } from "path";
+import { getCanonicalProjectPath } from "../utils/worktree.js";
 
 /**
  * Result of extraction processing
@@ -149,10 +150,11 @@ export class LiveExtractor {
     if (match) {
       // Convert the encoded path back to real path
       const encoded = match[1];
-      return "/" + encoded.replace(/-/g, "/").replace(/\/\//g, "-");
+      const decodedPath = "/" + encoded.replace(/-/g, "/").replace(/\/\//g, "-");
+      return getCanonicalProjectPath(decodedPath).canonicalPath;
     }
 
-    return dirname(filePath);
+    return getCanonicalProjectPath(dirname(filePath)).canonicalPath;
   }
 
   /**

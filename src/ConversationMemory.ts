@@ -1,7 +1,7 @@
 /**
  * Main Orchestrator - Coordinates all components for conversation memory indexing and retrieval.
  *
- * ConversationMemory is the primary interface for the conversation-memory-mcp system.
+ * ConversationMemory is the primary interface for the cccmemory-mcp system.
  * It orchestrates parsing, storage, extraction, and search of Claude Code conversation history.
  *
  * @example
@@ -22,6 +22,7 @@ import { MistakeExtractor } from "./parsers/MistakeExtractor.js";
 import { GitIntegrator } from "./parsers/GitIntegrator.js";
 import { RequirementsExtractor } from "./parsers/RequirementsExtractor.js";
 import { SemanticSearch } from "./search/SemanticSearch.js";
+import { getWorktreeInfo } from "./utils/worktree.js";
 
 /**
  * Configuration options for indexing conversations.
@@ -50,7 +51,7 @@ export interface IndexOptions {
   /**
    * Exclude MCP tool conversations from indexing.
    * - `false`: Index all conversations (default)
-   * - `'self-only'`: Exclude only conversation-memory MCP conversations (prevents self-referential loops)
+   * - `'self-only'`: Exclude only cccmemory MCP conversations (prevents self-referential loops)
    * - `'all-mcp'` or `true`: Exclude all MCP tool conversations
    * @default false
    */
@@ -59,9 +60,15 @@ export interface IndexOptions {
   /**
    * List of specific MCP server names to exclude.
    * More granular than `excludeMcpConversations`.
-   * @example ['conversation-memory', 'code-graph-rag']
+   * @example ['cccmemory', 'code-graph-rag']
    */
   excludeMcpServers?: string[];
+
+  /**
+   * Optional timestamp to skip unchanged conversation files.
+   * Files with mtime older than this will be skipped.
+   */
+  lastIndexedMs?: number;
 }
 
 /**
@@ -138,16 +145,26 @@ export class ConversationMemory {
     indexed_folders?: string[];
     database_path?: string;
   }> {
+    const { canonicalPath, worktreePaths } = getWorktreeInfo(options.projectPath);
+
     console.error("\n=== Indexing Conversations ===");
-    console.error(`Project: ${options.projectPath}`);
+    console.error(`Project: ${canonicalPath}`);
     if (options.sessionId) {
       console.error(`Session: ${options.sessionId} (single session mode)`);
     } else {
       console.error(`Mode: All sessions`);
     }
+    if (worktreePaths.length > 1) {
+      console.error(`Worktrees: ${worktreePaths.join(", ")}`);
+    }
 
     // Parse conversations
-    let parseResult = this.parser.parseProject(options.projectPath, options.sessionId);
+    let parseResult = this.parser.parseProjects(
+      worktreePaths,
+      options.sessionId,
+      canonicalPath,
+      options.lastIndexedMs
+    );
 
     // Filter MCP conversations if requested
     if (options.excludeMcpConversations || options.excludeMcpServers) {
@@ -203,7 +220,7 @@ export class ConversationMemory {
     if (options.enableGitIntegration !== false) {
       try {
         console.error("\n=== Integrating Git History ===");
-        const gitIntegrator = new GitIntegrator(options.projectPath);
+        const gitIntegrator = new GitIntegrator(canonicalPath);
         const commits = await gitIntegrator.linkCommitsToConversations(
           parseResult.conversations,
           parseResult.file_edits,
@@ -373,8 +390,8 @@ export class ConversationMemory {
       // Explicit list of servers to exclude
       options.excludeMcpServers.forEach(s => serversToExclude.add(s));
     } else if (options.excludeMcpConversations === 'self-only') {
-      // Exclude only conversation-memory server
-      serversToExclude.add('conversation-memory');
+      // Exclude only cccmemory server
+      serversToExclude.add('cccmemory');
     } else if (options.excludeMcpConversations === 'all-mcp' || options.excludeMcpConversations === true) {
       // Exclude all MCP tool uses - collect all server names from tool uses
       for (const toolUse of result.tool_uses) {

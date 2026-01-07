@@ -34,11 +34,85 @@
  */
 
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, openSync, closeSync } from "fs";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import { nanoid } from "nanoid";
 import { safeJsonParse } from "../utils/safeJson.js";
+import { getCanonicalProjectPath } from "../utils/worktree.js";
+
+function resolveGlobalIndexPath(): string {
+  const defaultPath = join(homedir(), ".claude", ".cccmemory-global.db");
+
+  const canCreateDbFile = (dbPath: string): boolean => {
+    try {
+      mkdirSync(dirname(dbPath), { recursive: true });
+      const fd = openSync(dbPath, "a");
+      closeSync(fd);
+      return true;
+    } catch (error) {
+      const err = error as { code?: string };
+      if (err.code === "EACCES" || err.code === "EPERM" || err.code === "EROFS") {
+        return false;
+      }
+      throw error;
+    }
+  };
+
+  const canWriteExistingDbFile = (dbPath: string): boolean => {
+    try {
+      const fd = openSync(dbPath, "r+");
+      closeSync(fd);
+      return true;
+    } catch (error) {
+      const err = error as { code?: string };
+      if (
+        err.code === "EACCES" ||
+        err.code === "EPERM" ||
+        err.code === "EROFS" ||
+        err.code === "ENOENT"
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  };
+
+  const requestedPath = process.env.CCCMEMORY_GLOBAL_INDEX_PATH;
+  if (requestedPath) {
+    if (canCreateDbFile(requestedPath)) {
+      return requestedPath;
+    }
+    throw new Error(
+      `Global index path is not writable: ${requestedPath}\n` +
+        "Fix permissions or set CCCMEMORY_GLOBAL_INDEX_PATH to a writable file path.\n" +
+        "If you're running under Codex or Claude with a locked home dir (~/.claude or ~/.codex), " +
+        "you must set CCCMEMORY_GLOBAL_INDEX_PATH explicitly."
+    );
+  }
+
+  if (canCreateDbFile(defaultPath)) {
+    return defaultPath;
+  }
+
+  const canonicalPath = getCanonicalProjectPath(process.cwd()).canonicalPath;
+  const fallbackPath = join(canonicalPath, ".cccmemory", "global-index.db");
+  if (existsSync(fallbackPath) && canWriteExistingDbFile(fallbackPath)) {
+    console.error(
+      `⚠️ Using existing project-local global index at ${fallbackPath}. ` +
+        "No new files are created there automatically. " +
+        "Set CCCMEMORY_GLOBAL_INDEX_PATH to make this explicit."
+    );
+    return fallbackPath;
+  }
+
+  throw new Error(
+    `Unable to create global index at ${defaultPath}.\n` +
+      `Fix permissions for ${dirname(defaultPath)} or set CCCMEMORY_GLOBAL_INDEX_PATH.\n` +
+      "If you're running under Codex or Claude with a locked home dir (~/.claude or ~/.codex), " +
+      "you must set CCCMEMORY_GLOBAL_INDEX_PATH explicitly."
+  );
+}
 
 export interface ProjectMetadata {
   id: string;
@@ -77,12 +151,12 @@ export class GlobalIndex {
   private initialized = false;
 
   constructor(customPath?: string) {
-    // Use custom path or default to ~/.claude/.claude-global-index.db
+    // Use custom path or default to ~/.claude/.cccmemory-global.db
     // Note: Database is NOT opened here - lazy initialization in ensureInitialized()
     if (customPath) {
       this.globalDbPath = customPath;
     } else {
-      this.globalDbPath = join(homedir(), ".claude", ".claude-global-index.db");
+      this.globalDbPath = resolveGlobalIndexPath();
     }
   }
 
@@ -93,9 +167,9 @@ export class GlobalIndex {
   private ensureInitialized(): Database.Database {
     if (!this.initialized || !this.db) {
       // Create parent directory if needed
-      const claudeHome = join(homedir(), ".claude");
-      if (!existsSync(claudeHome)) {
-        mkdirSync(claudeHome, { recursive: true });
+      const parentDir = dirname(this.globalDbPath);
+      if (!existsSync(parentDir)) {
+        mkdirSync(parentDir, { recursive: true });
       }
 
       // Open/create database
@@ -140,6 +214,7 @@ export class GlobalIndex {
 
   /**
    * Register or update a project in the global index.
+   * Uses atomic UPSERT to avoid race conditions.
    *
    * @param options - Project registration options
    * @returns The registered/updated project metadata
@@ -147,94 +222,75 @@ export class GlobalIndex {
   registerProject(options: RegisterProjectOptions): ProjectMetadata {
     const db = this.ensureInitialized();
     const now = Date.now();
+    const id = nanoid();
 
-    // Check if project already exists
-    const existing = db
-      .prepare("SELECT * FROM project_metadata WHERE project_path = ?")
-      .get(options.project_path) as ProjectMetadata | undefined;
+    // Atomic UPSERT - avoids race conditions between concurrent registrations
+    const stmt = db.prepare(`
+      INSERT INTO project_metadata (
+        id, project_path, source_type, db_path, last_indexed,
+        message_count, conversation_count, decision_count, mistake_count,
+        metadata, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_path) DO UPDATE SET
+        source_type = excluded.source_type,
+        db_path = excluded.db_path,
+        last_indexed = excluded.last_indexed,
+        message_count = excluded.message_count,
+        conversation_count = excluded.conversation_count,
+        decision_count = excluded.decision_count,
+        mistake_count = excluded.mistake_count,
+        metadata = excluded.metadata,
+        updated_at = excluded.updated_at
+    `);
 
-    if (existing) {
-      // Update existing project
-      const stmt = db.prepare(`
-        UPDATE project_metadata
-        SET source_type = ?,
-            db_path = ?,
-            last_indexed = ?,
-            message_count = ?,
-            conversation_count = ?,
-            decision_count = ?,
-            mistake_count = ?,
-            metadata = ?,
-            updated_at = ?
-        WHERE project_path = ?
-      `);
+    stmt.run(
+      id,
+      options.project_path,
+      options.source_type,
+      options.db_path,
+      now,
+      options.message_count ?? 0,
+      options.conversation_count ?? 0,
+      options.decision_count ?? 0,
+      options.mistake_count ?? 0,
+      JSON.stringify(options.metadata ?? {}),
+      now,
+      now
+    );
 
-      stmt.run(
-        options.source_type,
-        options.db_path,
-        now,
-        options.message_count || 0,
-        options.conversation_count || 0,
-        options.decision_count || 0,
-        options.mistake_count || 0,
-        JSON.stringify(options.metadata || {}),
-        now,
-        options.project_path
-      );
-
-      return {
-        ...existing,
-        source_type: options.source_type,
-        db_path: options.db_path,
-        last_indexed: now,
-        message_count: options.message_count || 0,
-        conversation_count: options.conversation_count || 0,
-        decision_count: options.decision_count || 0,
-        mistake_count: options.mistake_count || 0,
-        metadata: options.metadata || {},
-        updated_at: now,
-      };
-    } else {
-      // Insert new project
-      const id = nanoid();
-      const stmt = db.prepare(`
-        INSERT INTO project_metadata (
-          id, project_path, source_type, db_path, last_indexed,
-          message_count, conversation_count, decision_count, mistake_count,
-          metadata, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      stmt.run(
-        id,
-        options.project_path,
-        options.source_type,
-        options.db_path,
-        now,
-        options.message_count || 0,
-        options.conversation_count || 0,
-        options.decision_count || 0,
-        options.mistake_count || 0,
-        JSON.stringify(options.metadata || {}),
-        now,
-        now
-      );
-
-      return {
-        id,
-        project_path: options.project_path,
-        source_type: options.source_type,
-        db_path: options.db_path,
-        last_indexed: now,
-        message_count: options.message_count || 0,
-        conversation_count: options.conversation_count || 0,
-        decision_count: options.decision_count || 0,
-        mistake_count: options.mistake_count || 0,
-        metadata: options.metadata || {},
-        created_at: now,
-        updated_at: now,
-      };
+    // Fetch the actual record (may have existing id/created_at if it was an update)
+    interface ProjectRow {
+      id: string;
+      project_path: string;
+      source_type: "claude-code" | "codex";
+      db_path: string;
+      last_indexed: number;
+      message_count: number;
+      conversation_count: number;
+      decision_count: number;
+      mistake_count: number;
+      metadata: string;
+      created_at: number;
+      updated_at: number;
     }
+    const row = db
+      .prepare("SELECT * FROM project_metadata WHERE project_path = ?")
+      .get(options.project_path) as ProjectRow;
+
+    return {
+      id: row.id,
+      project_path: row.project_path,
+      source_type: row.source_type,
+      db_path: row.db_path,
+      last_indexed: row.last_indexed,
+      message_count: row.message_count,
+      conversation_count: row.conversation_count,
+      decision_count: row.decision_count,
+      mistake_count: row.mistake_count,
+      metadata: safeJsonParse(row.metadata, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
   }
 
   /**

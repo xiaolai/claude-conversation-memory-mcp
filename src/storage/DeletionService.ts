@@ -86,7 +86,7 @@ export class DeletionService {
     const placeholders = conversationIds.map(() => "?").join(",");
     const conversations = this.db
       .prepare(
-        `SELECT id, session_id, created_at, message_count
+        `SELECT id, id as session_id, created_at, message_count
          FROM conversations
          WHERE id IN (${placeholders})
          ORDER BY created_at DESC`
@@ -288,8 +288,9 @@ export class DeletionService {
           `SELECT DISTINCT m.conversation_id
            FROM messages_fts mf
            JOIN messages m ON m.rowid = mf.rowid
+           JOIN conversations c ON c.id = m.conversation_id
            WHERE messages_fts MATCH ?
-           AND m.project_path = ?
+           AND c.project_path = ?
            LIMIT 100`
         )
         .all(ftsQuery, projectPath) as Array<{ conversation_id: string }>;

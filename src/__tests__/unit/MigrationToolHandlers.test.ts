@@ -46,7 +46,7 @@ describe("Migration Tool Handlers", () => {
       const oldFolder = join(projectsDir, "-Users-test-old-project");
       mkdirSync(oldFolder, { recursive: true });
 
-      const dbPath = join(oldFolder, ".claude-conversations-memory.db");
+      const dbPath = join(oldFolder, ".cccmemory.db");
       const db = new Database(dbPath);
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT, first_message_at INTEGER, last_message_at INTEGER);
@@ -97,7 +97,7 @@ describe("Migration Tool Handlers", () => {
 
       [folder1, folder2, folder3].forEach((folder, i) => {
         mkdirSync(folder, { recursive: true });
-        const db = new Database(join(folder, ".claude-conversations-memory.db"));
+        const db = new Database(join(folder, ".cccmemory.db"));
         db.exec(`
           CREATE TABLE conversations (id TEXT, project_path TEXT);
           INSERT INTO conversations VALUES ('c${i}', '/Users/test/${i === 0 ? 'exact' : i === 1 ? 'similar' : 'different'}-project');
@@ -122,7 +122,7 @@ describe("Migration Tool Handlers", () => {
       const oldFolder = join(projectsDir, "-Users-test-project");
       mkdirSync(oldFolder, { recursive: true });
 
-      const db = new Database(join(oldFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(oldFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (
           id TEXT,
@@ -165,7 +165,7 @@ describe("Migration Tool Handlers", () => {
       writeFileSync(join(sourceFolder, "session1.jsonl"), 'content1');
       writeFileSync(join(sourceFolder, "session2.jsonl"), 'content2');
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/Users/test/old');
@@ -195,7 +195,7 @@ describe("Migration Tool Handlers", () => {
       expect(existsSync(join(targetFolder, "session2.jsonl"))).toBe(true);
 
       // Verify: Database updated
-      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
       const rows = targetDb.prepare("SELECT * FROM conversations").all() as Array<{
         id: string;
         project_path: string;
@@ -214,7 +214,7 @@ describe("Migration Tool Handlers", () => {
 
       writeFileSync(join(sourceFolder, "session.jsonl"), 'content');
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         CREATE TABLE messages (id TEXT);
@@ -248,7 +248,7 @@ describe("Migration Tool Handlers", () => {
 
       writeFileSync(join(sourceFolder, "source.jsonl"), 'source');
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         CREATE TABLE messages (id TEXT);
@@ -292,7 +292,7 @@ describe("Migration Tool Handlers", () => {
 
       writeFileSync(join(sourceFolder, "session.jsonl"), 'content');
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/old');
@@ -308,7 +308,7 @@ describe("Migration Tool Handlers", () => {
       });
 
       // Verify: Backup created
-      const backupPath = join(sourceFolder, ".claude-conversations-memory.db.bak");
+      const backupPath = join(sourceFolder, ".cccmemory.db.bak");
       expect(existsSync(backupPath)).toBe(true);
     });
 
@@ -320,7 +320,7 @@ describe("Migration Tool Handlers", () => {
       const originalContent = 'original content';
       writeFileSync(join(sourceFolder, "session.jsonl"), originalContent);
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/old');
@@ -337,7 +337,7 @@ describe("Migration Tool Handlers", () => {
 
       // Verify: Original still exists and unchanged
       expect(existsSync(join(sourceFolder, "session.jsonl"))).toBe(true);
-      expect(existsSync(join(sourceFolder, ".claude-conversations-memory.db"))).toBe(true);
+      expect(existsSync(join(sourceFolder, ".cccmemory.db"))).toBe(true);
     });
   });
 });

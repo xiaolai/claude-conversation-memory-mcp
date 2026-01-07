@@ -1,5 +1,5 @@
 /**
- * Claude Conversation Memory - MCP Server
+ * CCCMemory - MCP Server
  * MCP server implementation with stdio transport
  */
 
@@ -36,7 +36,7 @@ export class ConversationMemoryServer {
   constructor() {
     this.server = new Server(
       {
-        name: "claude-conversation-memory",
+        name: "cccmemory",
         version: VERSION,
       },
       {
@@ -171,7 +171,7 @@ export class ConversationMemoryServer {
   async start() {
     const transport = new StdioServerTransport();
 
-    console.error("[MCP] Claude Conversation Memory Server starting...");
+    console.error("[MCP] CCCMemory Server starting...");
     console.error(`[MCP] Database: ${getSQLiteManager().getStats().dbPath}`);
 
     await this.server.connect(transport);

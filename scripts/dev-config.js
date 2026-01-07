@@ -17,7 +17,7 @@ const projectRoot = resolve(__dirname, "..");
 const entryPoint = resolve(projectRoot, "dist", "index.js");
 
 const config = {
-  "conversation-memory": {
+  "cccmemory": {
     command: "node",
     args: [entryPoint],
   },
@@ -47,9 +47,9 @@ Steps to test local changes:
 
 To switch back to published version, use:
 {
-  "conversation-memory": {
+  "cccmemory": {
     "command": "npx",
-    "args": ["-y", "claude-conversation-memory-mcp"]
+    "args": ["-y", "cccmemory"]
   }
 }
 ────────────────────────────────────────────────────────────────────

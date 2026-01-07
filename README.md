@@ -1,4 +1,4 @@
-# Claude Conversation Memory MCP
+# CCCMemory MCP
 
 An MCP server that gives Claude long-term memory by indexing conversation history with semantic search, decision tracking, and cross-project search.
 
@@ -14,14 +14,20 @@ An MCP server that gives Claude long-term memory by indexing conversation histor
 
 ## Installation
 
+### Node.js version
+
+CCCMemory supports **Node.js 20 or 22 LTS**. Using other versions can break native
+modules (like `better-sqlite3`). If you switch Node versions, reinstall the
+package (or run `npm rebuild better-sqlite3` in a local clone).
+
 ```bash
-npm install -g claude-conversation-memory-mcp
+npm install -g cccmemory
 ```
 
 Verify installation:
 
 ```bash
-claude-conversation-memory-mcp --version
+cccmemory --version
 ```
 
 ## Configuration
@@ -33,9 +39,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 ```json
 {
   "mcpServers": {
-    "conversation-memory": {
+    "cccmemory": {
       "command": "npx",
-      "args": ["-y", "claude-conversation-memory-mcp"]
+      "args": ["-y", "cccmemory"]
     }
   }
 }
@@ -50,9 +56,9 @@ Edit `~/.claude.json` (note: this file is in your home directory, not inside `~/
 ```json
 {
   "mcpServers": {
-    "conversation-memory": {
+    "cccmemory": {
       "command": "npx",
-      "args": ["-y", "claude-conversation-memory-mcp"]
+      "args": ["-y", "cccmemory"]
     }
   }
 }
@@ -63,16 +69,63 @@ Or if installed globally:
 ```json
 {
   "mcpServers": {
-    "conversation-memory": {
-      "command": "claude-conversation-memory-mcp"
+    "cccmemory": {
+      "command": "cccmemory"
     }
   }
 }
 ```
 
+### For Codex CLI
+
+Codex stores MCP settings in `~/.codex/config.toml` (shared by the CLI and the IDE extension).
+
+**Recommended (CLI):**
+```bash
+codex mcp add cccmemory -- npx -y cccmemory
+```
+
+**Manual config (`~/.codex/config.toml`):**
+```toml
+[mcp_servers.cccmemory]
+command = "npx"
+args = ["-y", "cccmemory"]
+```
+
+If you installed globally, you can use:
+```toml
+[mcp_servers.cccmemory]
+command = "cccmemory"
+```
+
+Open Codex and run `/mcp` in the TUI to verify the server is active.
+
+### Storage Paths
+
+By default, CCCMemory stores per-project databases in:
+
+- `~/.claude/projects/<project>/.cccmemory.db`
+- Global index: `~/.claude/.cccmemory-global.db`
+
+If your home directory is not writable (common in sandboxed Codex/Claude setups where
+`~/.claude` and `~/.codex` are locked), the server will exit with a clear error.
+Set explicit paths to a writable location:
+
+```bash
+export CCCMEMORY_DB_PATH="/path/to/cccmemory.db"
+export CCCMEMORY_GLOBAL_INDEX_PATH="/path/to/cccmemory-global.db"
+```
+
+For MCP configs, add these env vars in your server definition. CCCMemory will not
+silently create new databases outside `~/.claude`; it only uses an existing
+project-local DB if one already exists and logs a warning.
+
 ### Embedding Configuration (Optional)
 
 The MCP uses **Transformers.js** by default for semantic search (bundled, works offline, no setup required).
+
+**Model download & cache behavior (Transformers.js):**  
+On first use, `@xenova/transformers` downloads the model weights and caches them in its own default cache directory. CCCMemory does not manage or relocate that cache. Subsequent runs reuse the cached model and work fully offline.
 
 To customize, create `~/.claude-memory-config.json`:
 
@@ -171,13 +224,13 @@ The package includes a standalone CLI:
 
 ```bash
 # Interactive mode
-claude-conversation-memory-mcp
+cccmemory
 
 # Single commands
-claude-conversation-memory-mcp status
-claude-conversation-memory-mcp index
-claude-conversation-memory-mcp "search authentication"
-claude-conversation-memory-mcp help
+cccmemory status
+cccmemory index
+cccmemory "search authentication"
+cccmemory help
 ```
 
 ## Supported Platforms
@@ -188,15 +241,20 @@ claude-conversation-memory-mcp help
 | Claude Desktop | ✅ Supported | (indexes Claude Code history) |
 | Codex | ✅ Supported | `~/.codex/sessions/` |
 
+**Why only Claude Code and Codex CLI today?**
+CCCMemory indexes local session history from stable, parseable on-disk formats. Claude Code and Codex CLI both store full conversation logs locally with consistent schemas. Other tools either do not expose full local history, only support partial/manual saves, or do not provide a stable file format to parse reliably. Without deterministic local storage, there is nothing safe to index or resume.
+
 ## Architecture
 
 ```
 Per-Project Databases (isolation)
-├── ~/.claude/projects/{project}/.claude-conversations-memory.db
-└── ~/.codex/.codex-conversations-memory.db
+├── ~/.claude/projects/{project}/.cccmemory.db (Claude Code default)
+├── ~/.codex/.cccmemory.db (Codex default)
+└── {project}/.cccmemory/.cccmemory.db (fallback in restricted sandboxes)
 
 Global Registry (cross-project search)
-└── ~/.claude/.claude-global-index.db
+├── ~/.claude/.cccmemory-global.db (default)
+└── {project}/.cccmemory/global-index.db (fallback in restricted sandboxes)
 ```
 
 ## Troubleshooting
@@ -205,7 +263,7 @@ Global Registry (cross-project search)
 
 Upgrade to v1.7.3+:
 ```bash
-npm update -g claude-conversation-memory-mcp
+npm update -g cccmemory
 ```
 
 ### MCP not loading in Claude Code
@@ -218,10 +276,10 @@ npm update -g claude-conversation-memory-mcp
 
 Check provider status:
 ```bash
-claude-conversation-memory-mcp status
+cccmemory status
 ```
 
-Default Transformers.js should work out of the box. If using Ollama, ensure it's running (`ollama serve`).
+Default Transformers.js should work out of the box. If you opt into Ollama, ensure it's running (`ollama serve`).
 
 ## License
 

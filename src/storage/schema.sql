@@ -1,4 +1,4 @@
--- Claude Conversation Memory Database Schema
+-- CCCMemory Database Schema
 -- Version: 1.0.0
 -- Optimized for SQLite + sqlite-vec
 

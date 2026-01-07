@@ -212,8 +212,10 @@ export class ConversationParser {
    * parses them into structured entities. Supports filtering by session ID
    * and handles both modern and legacy directory naming conventions.
    *
-   * @param projectPath - Absolute path to the project
+   * @param projectPath - Absolute path to the project (used for folder lookup)
    * @param sessionId - Optional session ID to filter for a single conversation
+   * @param projectIdentifier - Optional identifier to store as project_path
+   * @param lastIndexedMs - Optional timestamp to skip unchanged files (mtime)
    * @returns ParseResult containing all extracted entities
    *
    * @example
@@ -227,7 +229,12 @@ export class ConversationParser {
    * const sessionResults = parser.parseProject('/Users/me/my-project', 'session-123');
    * ```
    */
-  parseProject(projectPath: string, sessionId?: string): ParseResult {
+  parseProject(
+    projectPath: string,
+    sessionId?: string,
+    projectIdentifier?: string,
+    lastIndexedMs?: number
+  ): ParseResult {
     console.error(`Parsing conversations for project: ${projectPath}`);
     if (sessionId) {
       console.error(`Filtering for session: ${sessionId}`);
@@ -327,18 +334,146 @@ export class ConversationParser {
       indexed_folders: dirsToCheck,
     };
 
+    const projectPathForRecords = projectIdentifier || projectPath;
+    let skippedCount = 0;
     for (const file of files) {
       const filePath = fileMap.get(file);
       if (filePath) {
-        this.parseFile(filePath, result, projectPath);
+        if (lastIndexedMs) {
+          try {
+            const stats = statSync(filePath);
+            if (stats.mtimeMs < lastIndexedMs) {
+              skippedCount++;
+              continue;
+            }
+          } catch (_e) {
+            // If we can't stat the file, try to parse it anyway
+          }
+        }
+        this.parseFile(filePath, result, projectPathForRecords);
       }
     }
 
+    if (skippedCount > 0) {
+      console.error(`⏭ Skipped ${skippedCount} unchanged file(s)`);
+    }
     console.error(
       `Parsed ${result.conversations.length} conversations, ${result.messages.length} messages`
     );
 
     return result;
+  }
+
+  /**
+   * Parse conversations across multiple project paths and merge results.
+   *
+   * @param projectPaths - Project paths to scan for conversation folders
+   * @param sessionId - Optional session ID to filter for a single conversation
+   * @param projectIdentifier - Optional identifier to store as project_path
+   */
+  parseProjects(
+    projectPaths: string[],
+    sessionId?: string,
+    projectIdentifier?: string,
+    lastIndexedMs?: number
+  ): ParseResult {
+    const combined: ParseResult = {
+      conversations: [],
+      messages: [],
+      tool_uses: [],
+      tool_results: [],
+      file_edits: [],
+      thinking_blocks: [],
+      indexed_folders: [],
+      parse_errors: [],
+    };
+
+    const seen = {
+      conversations: new Set<string>(),
+      messages: new Set<string>(),
+      toolUses: new Set<string>(),
+      toolResults: new Set<string>(),
+      fileEdits: new Set<string>(),
+      thinkingBlocks: new Set<string>(),
+    };
+
+    const indexedFolders = new Set<string>();
+
+    for (const path of projectPaths) {
+      const result = this.parseProject(path, sessionId, projectIdentifier, lastIndexedMs);
+      this.mergeParseResults(combined, result, seen, indexedFolders);
+    }
+
+    combined.indexed_folders = Array.from(indexedFolders);
+    if (combined.parse_errors && combined.parse_errors.length === 0) {
+      delete combined.parse_errors;
+    }
+
+    return combined;
+  }
+
+  private mergeParseResults(
+    target: ParseResult,
+    source: ParseResult,
+    seen: {
+      conversations: Set<string>;
+      messages: Set<string>;
+      toolUses: Set<string>;
+      toolResults: Set<string>;
+      fileEdits: Set<string>;
+      thinkingBlocks: Set<string>;
+    },
+    indexedFolders: Set<string>
+  ): void {
+    for (const item of source.conversations) {
+      if (!seen.conversations.has(item.id)) {
+        seen.conversations.add(item.id);
+        target.conversations.push(item);
+      }
+    }
+    for (const item of source.messages) {
+      if (!seen.messages.has(item.id)) {
+        seen.messages.add(item.id);
+        target.messages.push(item);
+      }
+    }
+    for (const item of source.tool_uses) {
+      if (!seen.toolUses.has(item.id)) {
+        seen.toolUses.add(item.id);
+        target.tool_uses.push(item);
+      }
+    }
+    for (const item of source.tool_results) {
+      if (!seen.toolResults.has(item.id)) {
+        seen.toolResults.add(item.id);
+        target.tool_results.push(item);
+      }
+    }
+    for (const item of source.file_edits) {
+      if (!seen.fileEdits.has(item.id)) {
+        seen.fileEdits.add(item.id);
+        target.file_edits.push(item);
+      }
+    }
+    for (const item of source.thinking_blocks) {
+      if (!seen.thinkingBlocks.has(item.id)) {
+        seen.thinkingBlocks.add(item.id);
+        target.thinking_blocks.push(item);
+      }
+    }
+
+    if (source.indexed_folders) {
+      for (const folder of source.indexed_folders) {
+        indexedFolders.add(folder);
+      }
+    }
+
+    if (source.parse_errors && source.parse_errors.length > 0) {
+      if (!target.parse_errors) {
+        target.parse_errors = [];
+      }
+      target.parse_errors.push(...source.parse_errors);
+    }
   }
 
   /**

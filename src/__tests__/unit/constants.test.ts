@@ -27,7 +27,7 @@ describe('Constants', () => {
     });
 
     it('should have valid file names', () => {
-      expect(DB_CONFIG.DB_FILE_NAME).toBe('.claude-conversations-memory.db');
+      expect(DB_CONFIG.DB_FILE_NAME).toBe('.cccmemory.db');
       expect(DB_CONFIG.BACKUP_SUFFIX).toBe('.bak');
     });
 

@@ -8,6 +8,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type Database from "better-sqlite3";
 import { pathToProjectFolderName } from "../utils/sanitization.js";
+import { getCanonicalProjectPath } from "../utils/worktree.js";
 
 /**
  * Backup metadata
@@ -166,7 +167,8 @@ export class BackupManager {
    * Get backup directory for project
    */
   private getBackupDirectory(projectPath: string): string {
-    const projectFolderName = pathToProjectFolderName(projectPath);
+    const canonicalPath = getCanonicalProjectPath(projectPath).canonicalPath;
+    const projectFolderName = pathToProjectFolderName(canonicalPath);
     return join(homedir(), ".claude", "backups", projectFolderName);
   }
 

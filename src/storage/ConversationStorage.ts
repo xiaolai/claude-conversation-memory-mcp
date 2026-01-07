@@ -1,7 +1,7 @@
 /**
  * Conversation Storage Layer - CRUD operations for all conversation-related data.
  *
- * This class provides the data access layer for the conversation-memory system.
+ * This class provides the data access layer for the cccmemory system.
  * It handles storing and retrieving conversations, messages, tool uses, decisions,
  * mistakes, requirements, and git commits.
  *
@@ -298,13 +298,20 @@ export class ConversationStorage {
     }
 
     // Only query DB for specific parent_ids we need (O(k) where k = unique parent refs)
+    // Chunk to avoid SQLite's max variables limit (999 by default)
     if (parentIdsToCheck.size > 0) {
-      const placeholders = Array.from(parentIdsToCheck).map(() => '?').join(',');
-      const existingIds = this.db
-        .prepare(`SELECT id FROM messages WHERE id IN (${placeholders})`)
-        .all(...parentIdsToCheck) as { id: string }[];
-      for (const row of existingIds) {
-        messageIds.add(row.id);
+      const CHUNK_SIZE = 500; // Stay well under SQLite's limit
+      const parentIdsArray = Array.from(parentIdsToCheck);
+
+      for (let i = 0; i < parentIdsArray.length; i += CHUNK_SIZE) {
+        const chunk = parentIdsArray.slice(i, i + CHUNK_SIZE);
+        const placeholders = chunk.map(() => '?').join(',');
+        const existingIds = this.db
+          .prepare(`SELECT id FROM messages WHERE id IN (${placeholders})`)
+          .all(...chunk) as { id: string }[];
+        for (const row of existingIds) {
+          messageIds.add(row.id);
+        }
       }
     }
 
@@ -504,11 +511,28 @@ export class ConversationStorage {
       }
     }
 
-    const result = this.db
+    interface FileEditRow {
+      id: string;
+      conversation_id: string;
+      file_path: string;
+      message_id: string;
+      backup_version?: number;
+      backup_time?: number;
+      snapshot_timestamp: number;
+      metadata: string; // JSON string from database
+    }
+
+    const rows = this.db
       .prepare(
         "SELECT * FROM file_edits WHERE file_path = ? ORDER BY snapshot_timestamp DESC"
       )
-      .all(filePath) as FileEdit[];
+      .all(filePath) as FileEditRow[];
+
+    // Parse metadata JSON for each row
+    const result: FileEdit[] = rows.map(row => ({
+      ...row,
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
+    }));
 
     // Cache the result
     this.cache?.set(cacheKey, result);
@@ -599,6 +623,13 @@ export class ConversationStorage {
           JSON.stringify(decision.related_commits),
           decision.timestamp
         );
+        // Invalidate caches for related files
+        if (this.cache && decision.related_files) {
+          for (const filePath of decision.related_files) {
+            this.cache.delete(`decisions:${filePath}`);
+            this.cache.delete(`timeline:${filePath}`);
+          }
+        }
       }
     });
 
@@ -712,6 +743,13 @@ export class ConversationStorage {
           commit.related_message_id || null,
           JSON.stringify(commit.metadata)
         );
+        // Invalidate caches for affected files
+        if (this.cache && commit.files_changed) {
+          for (const filePath of commit.files_changed) {
+            this.cache.delete(`commits:${filePath}`);
+            this.cache.delete(`timeline:${filePath}`);
+          }
+        }
       }
     });
 

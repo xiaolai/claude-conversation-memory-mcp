@@ -4,12 +4,12 @@
  */
 
 import Database from "better-sqlite3";
-import { readFileSync } from "fs";
-import { join, dirname } from "path";
+import { readFileSync, mkdirSync, existsSync, openSync, closeSync, renameSync } from "fs";
+import { join, dirname, basename } from "path";
 import { homedir } from "os";
-import { mkdirSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { pathToProjectFolderName, escapeTableName } from "../utils/sanitization.js";
+import { getCanonicalProjectPath } from "../utils/worktree.js";
 import * as sqliteVec from "sqlite-vec";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +20,8 @@ const DEFAULT_CACHE_SIZE_KB = 64000; // 64MB cache
 const DEFAULT_MMAP_SIZE = 1000000000; // 1GB memory-mapped I/O (safe default)
 const PAGE_SIZE = 4096; // 4KB page size
 const WAL_AUTOCHECKPOINT = 1000; // Checkpoint WAL after 1000 pages
+const NEW_DB_FILE_NAME = ".cccmemory.db";
+const LEGACY_DB_FILE_NAMES = [".claude-conversations-memory.db", ".codex-conversations-memory.db"];
 
 export interface SQLiteConfig {
   dbPath?: string;
@@ -30,6 +32,178 @@ export interface SQLiteConfig {
   mmapSize?: number;
   /** Cache size in KB (default: 64MB) */
   cacheSizeKb?: number;
+}
+
+function resolveDbPath(config: SQLiteConfig = {}): string {
+  const projectPath = config.projectPath || process.cwd();
+  const canonicalPath = getCanonicalProjectPath(projectPath).canonicalPath;
+  const projectFolderName = pathToProjectFolderName(canonicalPath);
+  const defaultPath = join(
+    homedir(),
+    ".claude",
+    "projects",
+    projectFolderName,
+    NEW_DB_FILE_NAME
+  );
+  const fallbackPath = join(canonicalPath, ".cccmemory", NEW_DB_FILE_NAME);
+
+  const normalizeRequestedPath = (requestedPath: string): string => {
+    const requestedBase = basename(requestedPath);
+    if (LEGACY_DB_FILE_NAMES.includes(requestedBase)) {
+      return join(dirname(requestedPath), NEW_DB_FILE_NAME);
+    }
+    return requestedPath;
+  };
+
+  const getLegacyCandidates = (dir: string, targetPath: string): string[] => {
+    return LEGACY_DB_FILE_NAMES
+      .map((name) => join(dir, name))
+      .filter((legacyPath) => legacyPath !== targetPath);
+  };
+
+  const canCreateDbFile = (dbPath: string): boolean => {
+    try {
+      mkdirSync(dirname(dbPath), { recursive: true });
+      const fd = openSync(dbPath, "a");
+      closeSync(fd);
+      return true;
+    } catch (error) {
+      const err = error as { code?: string };
+      if (err.code === "EACCES" || err.code === "EPERM" || err.code === "EROFS") {
+        return false;
+      }
+      throw error;
+    }
+  };
+
+  const canWriteExistingDbFile = (dbPath: string): boolean => {
+    try {
+      const fd = openSync(dbPath, "r+");
+      closeSync(fd);
+      return true;
+    } catch (error) {
+      const err = error as { code?: string };
+      if (
+        err.code === "EACCES" ||
+        err.code === "EPERM" ||
+        err.code === "EROFS" ||
+        err.code === "ENOENT"
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  };
+
+  const maybeMigrateLegacyDb = (targetPath: string, readOnly: boolean): string => {
+    if (existsSync(targetPath)) {
+      return targetPath;
+    }
+
+    const legacyCandidates = getLegacyCandidates(dirname(targetPath), targetPath);
+    const legacyPath = legacyCandidates.find((candidate) => existsSync(candidate));
+    if (!legacyPath) {
+      return targetPath;
+    }
+
+    if (readOnly) {
+      console.error(
+        `⚠️ Found legacy database at ${legacyPath}. Using legacy file in read-only mode.`
+      );
+      return legacyPath;
+    }
+
+    try {
+      renameSync(legacyPath, targetPath);
+      console.error(`✓ Migrated legacy database to ${targetPath}`);
+      return targetPath;
+    } catch (error) {
+      const err = error as { code?: string };
+      if (err.code === "EACCES" || err.code === "EPERM" || err.code === "EXDEV" || err.code === "EROFS") {
+        const canWriteLegacy = canWriteExistingDbFile(legacyPath);
+        if (canWriteLegacy) {
+          console.error(
+            `⚠️ Failed to rename legacy database (${legacyPath} → ${targetPath}). Using legacy file instead.`
+          );
+          return legacyPath;
+        }
+        throw new Error(
+          `Legacy database found at ${legacyPath} but cannot be migrated or written.\n` +
+            `Fix permissions for ${dirname(legacyPath)} or set CCCMEMORY_DB_PATH to a writable file path.`
+        );
+      }
+      throw error;
+    }
+  };
+
+  const requestedPath = config.dbPath || process.env.CCCMEMORY_DB_PATH;
+  if (requestedPath) {
+    const normalizedPath = normalizeRequestedPath(requestedPath);
+    if (config.readOnly) {
+      const migratedPath = maybeMigrateLegacyDb(normalizedPath, true);
+      if (existsSync(migratedPath)) {
+        return migratedPath;
+      }
+      throw new Error(
+        `Database file not found at ${migratedPath} (read-only mode).\n` +
+          `Provide a valid path via CCCMEMORY_DB_PATH or config.dbPath.`
+      );
+    }
+    const migratedPath = maybeMigrateLegacyDb(normalizedPath, false);
+    if (migratedPath !== normalizedPath) {
+      return migratedPath;
+    }
+    if (canCreateDbFile(normalizedPath)) {
+      return normalizedPath;
+    }
+    throw new Error(
+      `Database path is not writable: ${normalizedPath}\n` +
+        "Fix permissions or set CCCMEMORY_DB_PATH to a writable file path.\n" +
+        "If you're running under Codex or Claude with a locked home dir (~/.claude or ~/.codex), " +
+        "you must set CCCMEMORY_DB_PATH explicitly."
+    );
+  }
+
+  if (config.readOnly) {
+    const migratedDefault = maybeMigrateLegacyDb(defaultPath, true);
+    if (existsSync(migratedDefault)) {
+      return migratedDefault;
+    }
+    if (existsSync(fallbackPath)) {
+      console.error(
+        `⚠️ Using existing project-local database at ${fallbackPath}. ` +
+          "No new files are created there automatically. " +
+          "Set CCCMEMORY_DB_PATH to make this explicit."
+      );
+      return fallbackPath;
+    }
+    throw new Error(
+      `Database file not found at ${defaultPath} (read-only mode).\n` +
+        "Create the database in write mode, or set CCCMEMORY_DB_PATH to an existing file."
+    );
+  }
+
+  const migratedDefault = maybeMigrateLegacyDb(defaultPath, false);
+  if (migratedDefault !== defaultPath) {
+    return migratedDefault;
+  }
+  if (canCreateDbFile(defaultPath)) {
+    return defaultPath;
+  }
+  if (existsSync(fallbackPath) && canWriteExistingDbFile(fallbackPath)) {
+    console.error(
+      `⚠️ Using existing project-local database at ${fallbackPath}. ` +
+        "No new files are created there automatically. " +
+        "Set CCCMEMORY_DB_PATH to make this explicit."
+    );
+    return fallbackPath;
+  }
+  throw new Error(
+    `Unable to create database in ${dirname(defaultPath)}.\n` +
+      `Fix permissions for ${dirname(defaultPath)} or set CCCMEMORY_DB_PATH to a writable file path.\n` +
+      "If you're running under Codex or Claude with a locked home dir (~/.claude or ~/.codex), " +
+      "you must set CCCMEMORY_DB_PATH explicitly."
+  );
 }
 
 export class SQLiteManager {
@@ -43,21 +217,7 @@ export class SQLiteManager {
     this.mmapSize = config.mmapSize ?? DEFAULT_MMAP_SIZE;
     this.cacheSizeKb = config.cacheSizeKb ?? DEFAULT_CACHE_SIZE_KB;
     // Determine database location
-    if (config.dbPath) {
-      // Explicit path provided
-      this.dbPath = config.dbPath;
-    } else {
-      // Per-project database in ~/.claude/projects/{project-folder}/
-      const projectPath = config.projectPath || process.cwd();
-      const projectFolderName = pathToProjectFolderName(projectPath);
-      this.dbPath = join(
-        homedir(),
-        ".claude",
-        "projects",
-        projectFolderName,
-        ".claude-conversations-memory.db"
-      );
-    }
+    this.dbPath = resolveDbPath(config);
 
     this.isReadOnly = config.readOnly || false;
 
@@ -181,7 +341,13 @@ export class SQLiteManager {
     // Skip write-related PRAGMAs in read-only mode
     if (!this.isReadOnly) {
       // WAL mode for concurrent reads during writes
-      this.db.pragma("journal_mode = WAL");
+      // If WAL cannot be enabled (e.g., sandboxed filesystem), fall back to MEMORY
+      try {
+        this.db.pragma("journal_mode = WAL");
+      } catch (error) {
+        console.error("⚠️ Failed to enable WAL mode, falling back to MEMORY journal:", (error as Error).message);
+        this.db.pragma("journal_mode = MEMORY");
+      }
 
       // NORMAL synchronous for balance between safety and speed
       this.db.pragma("synchronous = NORMAL");
@@ -594,18 +760,7 @@ const instances = new Map<string, SQLiteManager>();
  * Instances are cached by dbPath to avoid re-opening the same database.
  */
 export function getSQLiteManager(config?: SQLiteConfig): SQLiteManager {
-  // Create a temporary instance to resolve the dbPath from config
-  const resolvedPath = config?.dbPath || (() => {
-    const projectPath = config?.projectPath || process.cwd();
-    const projectFolderName = pathToProjectFolderName(projectPath);
-    return join(
-      homedir(),
-      ".claude",
-      "projects",
-      projectFolderName,
-      ".claude-conversations-memory.db"
-    );
-  })();
+  const resolvedPath = resolveDbPath(config);
 
   // Check if we already have an instance for this path
   const existing = instances.get(resolvedPath);
@@ -614,8 +769,8 @@ export function getSQLiteManager(config?: SQLiteConfig): SQLiteManager {
   }
 
   // Create new instance and cache it
-  const instance = new SQLiteManager(config);
-  instances.set(resolvedPath, instance);
+  const instance = new SQLiteManager({ ...config, dbPath: resolvedPath });
+  instances.set(instance.getDbPath(), instance);
   return instance;
 }
 

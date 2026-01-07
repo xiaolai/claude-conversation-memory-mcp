@@ -1,5 +1,5 @@
 /**
- * Claude Conversation Memory - Interactive CLI/REPL
+ * CCCMemory - Interactive CLI/REPL
  * Main entry point for interactive mode
  */
 
@@ -12,7 +12,7 @@ import { executeCommand } from "./commands.js";
 import { showWelcome } from "./help.js";
 
 /**
- * Interactive REPL for Claude Conversation Memory
+ * Interactive REPL for CCCMemory
  */
 export class ConversationMemoryCLI {
   private rl: readline.Interface | null = null;

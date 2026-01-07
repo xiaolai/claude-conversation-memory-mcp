@@ -44,7 +44,7 @@ describe("ProjectMigration", () => {
       mkdirSync(oldFolder, { recursive: true });
 
       // Create database with project_path
-      const dbPath = join(oldFolder, ".claude-conversations-memory.db");
+      const dbPath = join(oldFolder, ".cccmemory.db");
       const db = new Database(dbPath);
       db.exec(`
         CREATE TABLE conversations (
@@ -74,7 +74,7 @@ describe("ProjectMigration", () => {
       const oldFolder = join(projectsDir, "-Users-test-oldname-project");
       mkdirSync(oldFolder, { recursive: true });
 
-      const dbPath = join(oldFolder, ".claude-conversations-memory.db");
+      const dbPath = join(oldFolder, ".cccmemory.db");
       const db = new Database(dbPath);
       db.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT);
@@ -120,7 +120,7 @@ describe("ProjectMigration", () => {
       // Folder 1: Exact path match (should score highest)
       const folder1 = join(projectsDir, "-Users-test-project");
       mkdirSync(folder1, { recursive: true });
-      const db1 = new Database(join(folder1, ".claude-conversations-memory.db"));
+      const db1 = new Database(join(folder1, ".cccmemory.db"));
       db1.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/Users/test/project');
@@ -130,7 +130,7 @@ describe("ProjectMigration", () => {
       // Folder 2: Similar path (medium score)
       const folder2 = join(projectsDir, "-Users-test-old-project");
       mkdirSync(folder2, { recursive: true });
-      const db2 = new Database(join(folder2, ".claude-conversations-memory.db"));
+      const db2 = new Database(join(folder2, ".cccmemory.db"));
       db2.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/Users/test/old-project');
@@ -156,7 +156,7 @@ describe("ProjectMigration", () => {
       const oldFolder = join(projectsDir, "-Users-test-project");
       mkdirSync(oldFolder, { recursive: true });
 
-      const dbPath = join(oldFolder, ".claude-conversations-memory.db");
+      const dbPath = join(oldFolder, ".cccmemory.db");
       const db = new Database(dbPath);
       db.exec(`
         CREATE TABLE conversations (
@@ -202,7 +202,7 @@ describe("ProjectMigration", () => {
       const oldFolder = join(projectsDir, "-Users-test-project");
       mkdirSync(oldFolder, { recursive: true });
 
-      const dbPath = join(oldFolder, ".claude-conversations-memory.db");
+      const dbPath = join(oldFolder, ".cccmemory.db");
       writeFileSync(dbPath, "NOT A VALID DATABASE FILE");
 
       // Test: Should handle gracefully
@@ -237,7 +237,7 @@ describe("ProjectMigration", () => {
       // Setup: Source with corrupted database
       const sourceFolder = join(projectsDir, "-Users-test-source");
       mkdirSync(sourceFolder, { recursive: true });
-      writeFileSync(join(sourceFolder, ".claude-conversations-memory.db"), "CORRUPTED");
+      writeFileSync(join(sourceFolder, ".cccmemory.db"), "CORRUPTED");
 
       const targetFolder = join(projectsDir, "-Users-test-target");
 
@@ -281,7 +281,7 @@ describe("ProjectMigration", () => {
       mkdirSync(sourceFolder, { recursive: true });
 
       // Create database with stats
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         CREATE TABLE messages (id TEXT);
@@ -318,7 +318,7 @@ describe("ProjectMigration", () => {
       writeFileSync(join(sourceFolder, "session2.jsonl"), 'content2');
 
       // Create minimal database
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/old/path');
@@ -345,7 +345,7 @@ describe("ProjectMigration", () => {
       const targetFolder = join(projectsDir, "-Users-test-target");
       mkdirSync(sourceFolder, { recursive: true });
 
-      const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
+      const sourceDb = join(sourceFolder, ".cccmemory.db");
       const db = new Database(sourceDb);
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
@@ -359,7 +359,7 @@ describe("ProjectMigration", () => {
       await migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false);
 
       // Verify: Database copied
-      const targetDb = join(targetFolder, ".claude-conversations-memory.db");
+      const targetDb = join(targetFolder, ".cccmemory.db");
       expect(existsSync(targetDb)).toBe(true);
     });
 
@@ -369,7 +369,7 @@ describe("ProjectMigration", () => {
       const targetFolder = join(projectsDir, "-Users-test-target");
       mkdirSync(sourceFolder, { recursive: true });
 
-      const sourceDb = join(sourceFolder, ".claude-conversations-memory.db");
+      const sourceDb = join(sourceFolder, ".cccmemory.db");
       const db = new Database(sourceDb);
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
@@ -383,7 +383,7 @@ describe("ProjectMigration", () => {
       await migration.executeMigration(sourceFolder, targetFolder, "/old/path", "/new/path", false);
 
       // Verify: Paths updated
-      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
       const rows = targetDb.prepare("SELECT project_path FROM conversations").all() as Array<{project_path: string}>;
       targetDb.close();
 
@@ -398,7 +398,7 @@ describe("ProjectMigration", () => {
       const targetFolder = join(projectsDir, "-Users-test-target");
       mkdirSync(sourceFolder, { recursive: true });
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/old');
@@ -411,7 +411,7 @@ describe("ProjectMigration", () => {
       await migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false);
 
       // Verify: Backup created
-      const backupPath = join(sourceFolder, ".claude-conversations-memory.db.bak");
+      const backupPath = join(sourceFolder, ".cccmemory.db.bak");
       expect(existsSync(backupPath)).toBe(true);
     });
 
@@ -422,7 +422,7 @@ describe("ProjectMigration", () => {
       mkdirSync(sourceFolder, { recursive: true });
 
       // Create invalid database that will fail UPDATE
-      writeFileSync(join(sourceFolder, ".claude-conversations-memory.db"), "INVALID");
+      writeFileSync(join(sourceFolder, ".cccmemory.db"), "INVALID");
       writeFileSync(join(sourceFolder, "s.jsonl"), '{}');
 
       // Test: Should throw
@@ -443,7 +443,7 @@ describe("ProjectMigration", () => {
       writeFileSync(join(sourceFolder, "s1.jsonl"), '{}');
       writeFileSync(join(sourceFolder, "s2.jsonl"), '{}');
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/old');
@@ -471,7 +471,7 @@ describe("ProjectMigration", () => {
 
       writeFileSync(join(sourceFolder, "session.jsonl"), 'original');
 
-      const db = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(sourceFolder, ".cccmemory.db"));
       db.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('c1', '/old');
@@ -483,7 +483,7 @@ describe("ProjectMigration", () => {
 
       // Verify: Original still exists
       expect(existsSync(join(sourceFolder, "session.jsonl"))).toBe(true);
-      expect(existsSync(join(sourceFolder, ".claude-conversations-memory.db"))).toBe(true);
+      expect(existsSync(join(sourceFolder, ".cccmemory.db"))).toBe(true);
     });
   });
 
@@ -545,7 +545,7 @@ describe("ProjectMigration", () => {
 
       // Source has 1 conversation
       writeFileSync(join(sourceFolder, "source-session.jsonl"), "source-data");
-      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const sourceDb = new Database(join(sourceFolder, ".cccmemory.db"));
       sourceDb.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
         CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT);
@@ -556,7 +556,7 @@ describe("ProjectMigration", () => {
 
       // Target has 1 conversation
       writeFileSync(join(targetFolder, "target-session.jsonl"), "target-data");
-      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
       targetDb.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
         CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT);
@@ -576,7 +576,7 @@ describe("ProjectMigration", () => {
       );
 
       // Verify: Both conversations exist in target
-      const db = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(targetFolder, ".cccmemory.db"));
       const conversations = db.prepare("SELECT id FROM conversations ORDER BY id").all() as Array<{ id: string }>;
       expect(conversations).toHaveLength(2);
       expect(conversations.map(c => c.id)).toEqual([
@@ -597,7 +597,7 @@ describe("ProjectMigration", () => {
 
       // Source has conversation 'shared-id' with timestamp 1000
       writeFileSync(join(sourceFolder, "shared-id.jsonl"), "source-version");
-      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const sourceDb = new Database(join(sourceFolder, ".cccmemory.db"));
       sourceDb.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
         INSERT INTO conversations VALUES ('shared-id', '/old', 1000);
@@ -606,7 +606,7 @@ describe("ProjectMigration", () => {
 
       // Target has conversation 'shared-id' with timestamp 2000 (newer)
       writeFileSync(join(targetFolder, "shared-id.jsonl"), "target-version");
-      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
       targetDb.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT, last_message_at INTEGER);
         INSERT INTO conversations VALUES ('shared-id', '/new', 2000);
@@ -617,7 +617,7 @@ describe("ProjectMigration", () => {
       await migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false, "merge");
 
       // Verify: Target version kept (not overwritten)
-      const db = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const db = new Database(join(targetFolder, ".cccmemory.db"));
       const row = db.prepare("SELECT last_message_at FROM conversations WHERE id = ?").get("shared-id") as { last_message_at: number };
       expect(row.last_message_at).toBe(2000); // Target's timestamp preserved
       db.close();
@@ -637,7 +637,7 @@ describe("ProjectMigration", () => {
       // Source has 2 files
       writeFileSync(join(sourceFolder, "session-1.jsonl"), "data1");
       writeFileSync(join(sourceFolder, "session-2.jsonl"), "data2");
-      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const sourceDb = new Database(join(sourceFolder, ".cccmemory.db"));
       sourceDb.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT);
         INSERT INTO conversations VALUES ('session-1', '/old');
@@ -647,7 +647,7 @@ describe("ProjectMigration", () => {
 
       // Target already has session-1
       writeFileSync(join(targetFolder, "session-1.jsonl"), "existing");
-      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
       targetDb.exec(`
         CREATE TABLE conversations (id TEXT PRIMARY KEY, project_path TEXT);
         INSERT INTO conversations VALUES ('session-1', '/new');
@@ -683,7 +683,7 @@ describe("ProjectMigration", () => {
       mkdirSync(targetFolder, { recursive: true });
 
       writeFileSync(join(sourceFolder, "session.jsonl"), "source");
-      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const sourceDb = new Database(join(sourceFolder, ".cccmemory.db"));
       sourceDb.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('s1', '/old');
@@ -706,7 +706,7 @@ describe("ProjectMigration", () => {
       mkdirSync(targetFolder, { recursive: true });
 
       writeFileSync(join(sourceFolder, "s1.jsonl"), "source");
-      const sourceDb = new Database(join(sourceFolder, ".claude-conversations-memory.db"));
+      const sourceDb = new Database(join(sourceFolder, ".cccmemory.db"));
       sourceDb.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('s1', '/old');
@@ -714,7 +714,7 @@ describe("ProjectMigration", () => {
       sourceDb.close();
 
       writeFileSync(join(targetFolder, "t1.jsonl"), "target");
-      const targetDb = new Database(join(targetFolder, ".claude-conversations-memory.db"));
+      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
       targetDb.exec(`
         CREATE TABLE conversations (id TEXT, project_path TEXT);
         INSERT INTO conversations VALUES ('t1', '/new');
@@ -725,7 +725,7 @@ describe("ProjectMigration", () => {
       await migration.executeMigration(sourceFolder, targetFolder, "/old", "/new", false, "merge");
 
       // Verify: Backup created in target folder (not source)
-      expect(existsSync(join(targetFolder, ".claude-conversations-memory.db.bak"))).toBe(true);
+      expect(existsSync(join(targetFolder, ".cccmemory.db.bak"))).toBe(true);
     });
   });
 });

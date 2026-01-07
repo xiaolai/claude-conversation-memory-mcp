@@ -1,23 +1,22 @@
 {
-  "name": "claude-conversation-memory-mcp",
+  "name": "cccmemory",
   "version": "1.7.15",
   "description": "MCP server for indexing and searching Claude Code conversation history with decision tracking, git integration, and project migration/merge",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "claude-conversation-memory-mcp": "dist/index.js"
+    "cccmemory": "dist/index.js"
   },
   "files": [
     "dist",
     "scripts",
     "README.md",
-    "LICENSE",
-    ".claude-memory-config.example.json",
-    ".claude-memory-config.example.jsonc"
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc && npm run postbuild",
     "postbuild": "cp src/storage/schema.sql dist/storage/",
+    "preinstall": "node scripts/check-node.js",
     "postinstall": "node scripts/postinstall.js",
     "dev": "tsc --watch",
     "dev:config": "node scripts/dev-config.js",
@@ -47,12 +46,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiaolai/claude-conversation-memory-mcp.git"
+    "url": "git+https://github.com/xiaolai/cccmemory.git"
   },
   "bugs": {
-    "url": "https://github.com/xiaolai/claude-conversation-memory-mcp/issues"
+    "url": "https://github.com/xiaolai/cccmemory/issues"
   },
-  "homepage": "https://github.com/xiaolai/claude-conversation-memory-mcp#readme",
+  "homepage": "https://github.com/xiaolai/cccmemory#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@xenova/transformers": "^2.17.2",
@@ -88,7 +87,7 @@
     "typescript": "^5.7.3"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20 <23"
   },
   "lint-staged": {
     "*.ts": [

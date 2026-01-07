@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Post-install script to automatically configure claude-conversation-memory-mcp
+ * Post-install script to automatically configure cccmemory
  * in Claude Code's global configuration (~/.claude.json)
  */
 
@@ -12,23 +12,40 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 const CLAUDE_CONFIG_PATH = join(homedir(), '.claude.json');
-const SERVER_NAME = 'conversation-memory';
+const SERVER_NAME = 'cccmemory';
+const ABI_RECORD_PATH = join(process.cwd(), '.node-abi.json');
+
+function recordNodeAbi() {
+  const payload = {
+    nodeVersion: process.versions.node || 'unknown',
+    modules: process.versions.modules || 'unknown',
+    recordedAt: new Date().toISOString(),
+  };
+
+  try {
+    writeFileSync(ABI_RECORD_PATH, JSON.stringify(payload, null, 2), 'utf-8');
+  } catch (error) {
+    console.log(`⚠️  Failed to record Node ABI: ${error.message}`);
+  }
+}
 
 function postInstall() {
+  recordNodeAbi();
+
   // Only run if this is a global installation
   if (process.env.npm_config_global !== 'true') {
     console.log('📦 Local installation detected - skipping global MCP configuration');
-    console.log('   To configure manually, run: claude mcp add --scope user conversation-memory');
+    console.log('   To configure manually, run: claude mcp add --scope user cccmemory');
     return;
   }
 
-  console.log('🔧 Configuring claude-conversation-memory-mcp in Claude Code...');
+  console.log('🔧 Configuring cccmemory in Claude Code...');
 
   // Check if Claude Code config exists
   if (!existsSync(CLAUDE_CONFIG_PATH)) {
     console.log('⚠️  Claude Code configuration not found at ~/.claude.json');
     console.log('   Please install Claude Code first: https://claude.ai/download');
-    console.log('   Then run: claude mcp add --scope user conversation-memory claude-conversation-memory-mcp');
+    console.log('   Then run: claude mcp add --scope user cccmemory cccmemory');
     return;
   }
 
@@ -39,7 +56,7 @@ function postInstall() {
 
     // Check if already configured
     if (config.mcpServers && config.mcpServers[SERVER_NAME]) {
-      console.log('✓ conversation-memory MCP server is already configured');
+      console.log('✓ cccmemory MCP server is already configured');
       console.log('  Current command:', config.mcpServers[SERVER_NAME].command);
       return;
     }
@@ -57,7 +74,7 @@ function postInstall() {
     // Add our MCP server configuration
     config.mcpServers[SERVER_NAME] = {
       type: 'stdio',
-      command: 'claude-conversation-memory-mcp',
+      command: 'cccmemory',
       args: [],
       env: {}
     };
@@ -69,7 +86,7 @@ function postInstall() {
       'utf-8'
     );
 
-    console.log('✅ Successfully configured conversation-memory MCP server!');
+    console.log('✅ Successfully configured cccmemory MCP server!');
     console.log();
     console.log('🎉 Setup complete! You can now use these tools in Claude Code:');
     console.log('   • index_conversations      - Index conversation history');
@@ -79,7 +96,7 @@ function postInstall() {
     console.log('   • forget_by_topic          - Selectively delete conversations');
     console.log('   • and 10 more tools...');
     console.log();
-    console.log('📚 Documentation: https://github.com/xiaolai/claude-conversation-memory-mcp');
+    console.log('📚 Documentation: https://github.com/xiaolai/cccmemory');
     console.log('🔍 List tools: /mcp (in Claude Code)');
 
   } catch (error) {
@@ -88,9 +105,9 @@ function postInstall() {
     console.log('💡 Manual configuration:');
     console.log('   Add this to ~/.claude.json under "mcpServers":');
     console.log('   {');
-    console.log('     "conversation-memory": {');
+    console.log('     "cccmemory": {');
     console.log('       "type": "stdio",');
-    console.log('       "command": "claude-conversation-memory-mcp",');
+    console.log('       "command": "cccmemory",');
     console.log('       "args": []');
     console.log('     }');
     console.log('   }');

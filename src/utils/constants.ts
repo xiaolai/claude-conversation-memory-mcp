@@ -14,7 +14,7 @@ export const DB_CONFIG = {
   WAL_AUTOCHECKPOINT: 1000, // Checkpoint WAL after 1000 pages
 
   // Database file name
-  DB_FILE_NAME: '.claude-conversations-memory.db',
+  DB_FILE_NAME: '.cccmemory.db',
 
   // Backup suffix
   BACKUP_SUFFIX: '.bak',

@@ -327,7 +327,7 @@ describe("ConversationParser", () => {
               {
                 type: "tool_use",
                 id: "tool-001",
-                name: "mcp__conversation-memory__search_conversations",
+                name: "mcp__cccmemory__search_conversations",
                 input: { query: "test" },
               },
             ],
@@ -347,7 +347,7 @@ describe("ConversationParser", () => {
         mcp_usage?: { detected: boolean; servers: string[] };
       };
       expect(metadata.mcp_usage?.detected).toBe(true);
-      expect(metadata.mcp_usage?.servers).toContain("conversation-memory");
+      expect(metadata.mcp_usage?.servers).toContain("cccmemory");
     });
 
     it("should filter NaN timestamps", () => {

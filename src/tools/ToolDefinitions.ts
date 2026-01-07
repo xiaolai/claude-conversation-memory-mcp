@@ -29,12 +29,12 @@ export const TOOLS = {
         },
         exclude_mcp_conversations: {
           type: ["boolean", "string"],
-          description: "Exclude MCP tool conversations from indexing. Options: 'self-only' (exclude only conversation-memory MCP to prevent self-referential loops, DEFAULT), false (index all MCP conversations), 'all-mcp' or true (exclude all MCP tool conversations)",
+          description: "Exclude MCP tool conversations from indexing. Options: 'self-only' (exclude only cccmemory MCP to prevent self-referential loops, DEFAULT), false (index all MCP conversations), 'all-mcp' or true (exclude all MCP tool conversations)",
           default: "self-only",
         },
         exclude_mcp_servers: {
           type: "array",
-          description: "List of specific MCP server names to exclude (e.g., ['conversation-memory', 'code-graph-rag']). More granular than exclude_mcp_conversations.",
+          description: "List of specific MCP server names to exclude (e.g., ['cccmemory', 'code-graph-rag']). More granular than exclude_mcp_conversations.",
           items: { type: "string" },
         },
       },

@@ -37,7 +37,7 @@ describe("GlobalIndex", () => {
       const project = globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.claude-conversations-memory.db",
+        db_path: "/test/project/.cccmemory.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -54,7 +54,7 @@ describe("GlobalIndex", () => {
       const project = globalIndex.registerProject({
         project_path: "/home/user/.codex",
         source_type: "codex",
-        db_path: "/home/user/.codex/.codex-conversations-memory.db",
+        db_path: "/home/user/.codex/.cccmemory.db",
         message_count: 200,
         conversation_count: 20,
         decision_count: 15,

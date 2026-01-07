@@ -31,6 +31,7 @@ coverage/
 # Temporary
 *.tmp
 *.temp
+.node-abi.json
 
 # Database (don't commit user's conversations)
 *.db
@@ -47,3 +48,4 @@ CLAUDE.md
 
 .writers-aid/
 logs_llm/
+:memory:

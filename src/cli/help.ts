@@ -31,7 +31,7 @@ export function showWelcome() {
   const dbPath = getSQLiteManager().getStats().dbPath;
   const shortPath = dbPath.replace(process.env.HOME || "", "~");
   const version = getVersion();
-  const versionText = `Claude Conversation Memory v${version}`.padEnd(55);
+  const versionText = `CCCMemory v${version}`.padEnd(55);
 
   console.log(chalk.cyan("┌─────────────────────────────────────────────────────────┐"));
   console.log(chalk.cyan("│") + ` ${versionText} ` + chalk.cyan("│"));
@@ -47,7 +47,7 @@ export function showWelcome() {
 export function showHelp(): string {
   const version = getVersion();
   return `
-${chalk.bold(`Claude Conversation Memory v${version} - Interactive CLI`)}
+${chalk.bold(`CCCMemory v${version} - Interactive CLI`)}
 
 ${chalk.bold("CATEGORIES:")}
 
@@ -299,7 +299,7 @@ ${chalk.bold("USAGE:")}
   init-mcp
 
 ${chalk.bold("DESCRIPTION:")}
-  Automatically configure the conversation-memory MCP server in
+  Automatically configure the cccmemory MCP server in
   Claude Code's global configuration (~/.claude.json).
 
   This command:
@@ -325,7 +325,7 @@ ${chalk.bold("USAGE:")}
   remove-mcp
 
 ${chalk.bold("DESCRIPTION:")}
-  Remove the conversation-memory MCP server from Claude Code's
+  Remove the cccmemory MCP server from Claude Code's
   global configuration (~/.claude.json).
 
   This command:
