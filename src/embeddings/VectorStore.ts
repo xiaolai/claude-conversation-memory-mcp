@@ -30,14 +30,36 @@ export class VectorStore {
    */
   private detectVecExtension(): void {
     try {
-      // Try to create a test virtual table
+      // First, check if vec0 module is registered by querying sqlite_master
+      // This works even in read-only mode
+      const vecTables = this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'vec_%'")
+        .all() as Array<{ name: string }>;
+
+      // If vec tables exist, the extension was loaded successfully before
+      if (vecTables.length > 0) {
+        this.hasVecExtension = true;
+        console.error("✓ sqlite-vec extension detected (existing tables found)");
+        return;
+      }
+
+      // Try to create a test virtual table (requires write access)
       this.db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS vec_test USING vec0(test float[1])");
       this.db.exec("DROP TABLE vec_test");
       this.hasVecExtension = true;
       console.error("✓ sqlite-vec extension detected");
-    } catch (_error) {
-      this.hasVecExtension = false;
-      console.error("⚠ sqlite-vec not available, using BLOB fallback");
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+      // Check if it's a read-only error vs actual missing extension
+      if (errorMessage.includes("readonly") || errorMessage.includes("read-only")) {
+        // Database is read-only, assume vec is available if extension loaded
+        // (SQLiteManager would have failed to load if it wasn't)
+        this.hasVecExtension = true;
+        console.error("✓ sqlite-vec extension assumed available (read-only mode)");
+      } else {
+        this.hasVecExtension = false;
+        console.error("⚠ sqlite-vec not available:", errorMessage);
+      }
     }
   }
 
