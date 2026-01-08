@@ -762,8 +762,12 @@ export class ConversationParser {
       .filter((t) => !isNaN(t))
       .sort((a, b) => a - b);
 
+    // Use fallback timestamp if no valid timestamps found
+    // This prevents FK constraint failures when messages reference this conversation
     if (timestamps.length === 0) {
-      return;
+      const fallbackTimestamp = Date.now();
+      timestamps.push(fallbackTimestamp);
+      console.error(`⚠️ No valid timestamps in conversation ${sessionId}, using current time as fallback`);
     }
 
     // Get most common git branch and version
