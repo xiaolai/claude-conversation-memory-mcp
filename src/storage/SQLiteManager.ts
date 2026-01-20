@@ -1,6 +1,5 @@
 /**
- * SQLite Manager with optimized settings
- * Based on patterns from code-graph-rag-mcp for maximum performance
+ * SQLite Manager with optimized settings for local indexing workloads
  */
 
 import Database from "better-sqlite3";
@@ -16,7 +15,7 @@ import { MigrationManager, migrations } from "./migrations.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Performance constants (from code-graph-rag-mcp)
+// Performance constants
 const DEFAULT_CACHE_SIZE_KB = 64000; // 64MB cache
 const DEFAULT_MMAP_SIZE = 1000000000; // 1GB memory-mapped I/O (safe default)
 const PAGE_SIZE = 4096; // 4KB page size
@@ -366,7 +365,6 @@ export class SQLiteManager {
 
   /**
    * Apply performance optimizations
-   * Based on code-graph-rag-mcp sqlite-manager.ts
    */
   private optimizeDatabase(): void {
     // Skip write-related PRAGMAs in read-only mode

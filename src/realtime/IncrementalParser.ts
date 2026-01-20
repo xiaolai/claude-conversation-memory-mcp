@@ -54,17 +54,22 @@ export class IncrementalParser {
     const stats = statSync(filePath);
     const fileInfo = this.filePositions.get(filePath);
 
-    // Check if file has been modified
-    if (fileInfo && stats.mtimeMs <= fileInfo.lastModified) {
-      return []; // No changes
+    // Check if file has been modified (mtime granularity can be coarse)
+    if (fileInfo) {
+      const sizeUnchanged = stats.size <= fileInfo.lastPosition;
+      const mtimeUnchanged = stats.mtimeMs <= fileInfo.lastModified;
+      if (mtimeUnchanged && sizeUnchanged) {
+        return []; // No changes
+      }
     }
 
     // Read file content
     const content = readFileSync(filePath, "utf-8");
     const lines = content.split("\n").filter((line) => line.trim());
 
-    // Determine where to start parsing
-    const startLine = fileInfo ? fileInfo.lineCount : 0;
+    // Determine where to start parsing (reset if file was truncated)
+    const startLine =
+      fileInfo && stats.size >= fileInfo.lastPosition ? fileInfo.lineCount : 0;
 
     // Parse new lines
     const messages: ParsedMessage[] = [];

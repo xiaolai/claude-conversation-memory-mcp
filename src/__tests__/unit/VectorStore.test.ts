@@ -26,6 +26,23 @@ describe('VectorStore', () => {
     // Force vectorStore to use BLOB storage by disabling vec extension
     // This makes tests simpler since getEmbeddingCount() queries BLOB tables
     (vectorStore as unknown as { hasVecExtension: boolean }).hasVecExtension = false;
+
+    const db = sqliteManager.getDatabase();
+    const insertMessage = (id: number) => {
+      db.prepare(
+        `INSERT OR IGNORE INTO messages
+         (id, conversation_id, external_id, message_type, timestamp, is_sidechain, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(id, 1, `msg-${id}`, 'test', Date.now(), 0, '{}');
+    };
+
+    const seededIds = [
+      1, 2, 3, 10, 11, 12, 100, 200, 201, 202, 203, 204,
+      ...Array.from({ length: 10 }, (_, i) => 1000 + i),
+    ];
+    for (const id of seededIds) {
+      insertMessage(id);
+    }
   });
 
   afterEach(() => {
@@ -57,7 +74,7 @@ describe('VectorStore', () => {
     it('should store message embedding', async () => {
       const embedding = new Float32Array([0.1, 0.2, 0.3, 0.4]);
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'test content', embedding);
+      await vectorStore.storeMessageEmbedding(1, 'test content', embedding);
 
       // Verify it was stored
       const count = vectorStore.getEmbeddingCount();
@@ -68,8 +85,8 @@ describe('VectorStore', () => {
       const embedding1 = new Float32Array([0.1, 0.2, 0.3]);
       const embedding2 = new Float32Array([0.4, 0.5, 0.6]);
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'content 1', embedding1);
-      await vectorStore.storeMessageEmbedding('msg-2', 'content 2', embedding2);
+      await vectorStore.storeMessageEmbedding(1, 'content 1', embedding1);
+      await vectorStore.storeMessageEmbedding(2, 'content 2', embedding2);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(2);
@@ -79,8 +96,8 @@ describe('VectorStore', () => {
       const embedding1 = new Float32Array([0.1, 0.2]);
       const embedding2 = new Float32Array([0.3, 0.4]);
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'content 1', embedding1);
-      await vectorStore.storeMessageEmbedding('msg-1', 'content 2', embedding2);
+      await vectorStore.storeMessageEmbedding(1, 'content 1', embedding1);
+      await vectorStore.storeMessageEmbedding(1, 'content 2', embedding2);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(1);
@@ -89,7 +106,7 @@ describe('VectorStore', () => {
     it('should handle empty content', async () => {
       const embedding = new Float32Array([0.1, 0.2]);
 
-      await vectorStore.storeMessageEmbedding('msg-1', '', embedding);
+      await vectorStore.storeMessageEmbedding(1, '', embedding);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(1);
@@ -101,7 +118,7 @@ describe('VectorStore', () => {
         embedding[i] = Math.random();
       }
 
-      await vectorStore.storeMessageEmbedding('msg-large', 'large embedding', embedding);
+      await vectorStore.storeMessageEmbedding(100, 'large embedding', embedding);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(1);
@@ -112,7 +129,7 @@ describe('VectorStore', () => {
     it('should store decision embedding', async () => {
       const embedding = new Float32Array([0.1, 0.2, 0.3]);
 
-      await vectorStore.storeDecisionEmbedding('dec-1', embedding);
+      await vectorStore.storeDecisionEmbedding(10, embedding);
 
       // Decision embeddings are in a separate table, so this should not throw
       expect(true).toBe(true);
@@ -122,8 +139,8 @@ describe('VectorStore', () => {
       const embedding1 = new Float32Array([0.1, 0.2]);
       const embedding2 = new Float32Array([0.3, 0.4]);
 
-      await vectorStore.storeDecisionEmbedding('dec-1', embedding1);
-      await vectorStore.storeDecisionEmbedding('dec-2', embedding2);
+      await vectorStore.storeDecisionEmbedding(10, embedding1);
+      await vectorStore.storeDecisionEmbedding(11, embedding2);
 
       // Should not throw
       expect(true).toBe(true);
@@ -133,8 +150,8 @@ describe('VectorStore', () => {
       const embedding1 = new Float32Array([0.1, 0.2]);
       const embedding2 = new Float32Array([0.3, 0.4]);
 
-      await vectorStore.storeDecisionEmbedding('dec-1', embedding1);
-      await vectorStore.storeDecisionEmbedding('dec-1', embedding2);
+      await vectorStore.storeDecisionEmbedding(10, embedding1);
+      await vectorStore.storeDecisionEmbedding(10, embedding2);
 
       // Should not throw
       expect(true).toBe(true);
@@ -144,9 +161,9 @@ describe('VectorStore', () => {
   describe('searchMessages', () => {
     beforeEach(async () => {
       // Store some test embeddings
-      await vectorStore.storeMessageEmbedding('msg-1', 'hello world', new Float32Array([1.0, 0.0, 0.0]));
-      await vectorStore.storeMessageEmbedding('msg-2', 'goodbye world', new Float32Array([0.0, 1.0, 0.0]));
-      await vectorStore.storeMessageEmbedding('msg-3', 'test message', new Float32Array([0.0, 0.0, 1.0]));
+      await vectorStore.storeMessageEmbedding(1, 'hello world', new Float32Array([1.0, 0.0, 0.0]));
+      await vectorStore.storeMessageEmbedding(2, 'goodbye world', new Float32Array([0.0, 1.0, 0.0]));
+      await vectorStore.storeMessageEmbedding(3, 'test message', new Float32Array([0.0, 0.0, 1.0]));
     });
 
     it('should search for similar messages', async () => {
@@ -193,9 +210,9 @@ describe('VectorStore', () => {
       // Clear and add new test data
       vectorStore.clearAllEmbeddings();
 
-      await vectorStore.storeMessageEmbedding('msg-exact', 'exact match', new Float32Array([1.0, 0.0]));
-      await vectorStore.storeMessageEmbedding('msg-close', 'close match', new Float32Array([0.9, 0.1]));
-      await vectorStore.storeMessageEmbedding('msg-far', 'far match', new Float32Array([0.0, 1.0]));
+      await vectorStore.storeMessageEmbedding(10, 'exact match', new Float32Array([1.0, 0.0]));
+      await vectorStore.storeMessageEmbedding(11, 'close match', new Float32Array([0.9, 0.1]));
+      await vectorStore.storeMessageEmbedding(12, 'far match', new Float32Array([0.0, 1.0]));
 
       const queryEmbedding = new Float32Array([1.0, 0.0]);
       const results = await vectorStore.searchMessages(queryEmbedding, 3);
@@ -215,18 +232,18 @@ describe('VectorStore', () => {
     it('should return correct count after storing embeddings', async () => {
       vectorStore.clearAllEmbeddings();
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'test 1', new Float32Array([0.1]));
+      await vectorStore.storeMessageEmbedding(1, 'test 1', new Float32Array([0.1]));
       expect(vectorStore.getEmbeddingCount()).toBe(1);
 
-      await vectorStore.storeMessageEmbedding('msg-2', 'test 2', new Float32Array([0.2]));
+      await vectorStore.storeMessageEmbedding(2, 'test 2', new Float32Array([0.2]));
       expect(vectorStore.getEmbeddingCount()).toBe(2);
     });
 
     it('should not double count replaced embeddings', async () => {
       vectorStore.clearAllEmbeddings();
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'test 1', new Float32Array([0.1]));
-      await vectorStore.storeMessageEmbedding('msg-1', 'test 1 updated', new Float32Array([0.2]));
+      await vectorStore.storeMessageEmbedding(1, 'test 1', new Float32Array([0.1]));
+      await vectorStore.storeMessageEmbedding(1, 'test 1 updated', new Float32Array([0.2]));
 
       expect(vectorStore.getEmbeddingCount()).toBe(1);
     });
@@ -234,8 +251,8 @@ describe('VectorStore', () => {
 
   describe('clearAllEmbeddings', () => {
     it('should clear all message embeddings', async () => {
-      await vectorStore.storeMessageEmbedding('msg-1', 'test', new Float32Array([0.1]));
-      await vectorStore.storeMessageEmbedding('msg-2', 'test', new Float32Array([0.2]));
+      await vectorStore.storeMessageEmbedding(1, 'test', new Float32Array([0.1]));
+      await vectorStore.storeMessageEmbedding(2, 'test', new Float32Array([0.2]));
 
       expect(vectorStore.getEmbeddingCount()).toBe(2);
 
@@ -250,7 +267,7 @@ describe('VectorStore', () => {
     });
 
     it('should clear decision embeddings too', async () => {
-      await vectorStore.storeDecisionEmbedding('dec-1', new Float32Array([0.1]));
+      await vectorStore.storeDecisionEmbedding(10, new Float32Array([0.1]));
 
       vectorStore.clearAllEmbeddings();
 
@@ -264,7 +281,7 @@ describe('VectorStore', () => {
       const embedding = new Float32Array(0);
 
       await expect(
-        vectorStore.storeMessageEmbedding('msg-empty', 'empty embedding', embedding)
+        vectorStore.storeMessageEmbedding(200, 'empty embedding', embedding)
       ).resolves.not.toThrow();
     });
 
@@ -272,7 +289,7 @@ describe('VectorStore', () => {
       const longContent = 'a'.repeat(100000);
       const embedding = new Float32Array([0.1, 0.2]);
 
-      await vectorStore.storeMessageEmbedding('msg-long', longContent, embedding);
+      await vectorStore.storeMessageEmbedding(201, longContent, embedding);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(1);
@@ -282,7 +299,7 @@ describe('VectorStore', () => {
       const specialContent = 'Test with 你好 émojis 🎉 and "quotes"';
       const embedding = new Float32Array([0.1, 0.2]);
 
-      await vectorStore.storeMessageEmbedding('msg-special', specialContent, embedding);
+      await vectorStore.storeMessageEmbedding(202, specialContent, embedding);
 
       const results = await vectorStore.searchMessages(embedding, 1);
       expect(results[0].content).toBe(specialContent);
@@ -291,7 +308,7 @@ describe('VectorStore', () => {
     it('should handle embeddings with all zeros', async () => {
       const zeroEmbedding = new Float32Array([0.0, 0.0, 0.0]);
 
-      await vectorStore.storeMessageEmbedding('msg-zero', 'zero embedding', zeroEmbedding);
+      await vectorStore.storeMessageEmbedding(203, 'zero embedding', zeroEmbedding);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(1);
@@ -300,7 +317,7 @@ describe('VectorStore', () => {
     it('should handle embeddings with negative values', async () => {
       const negativeEmbedding = new Float32Array([-0.5, 0.3, -0.2]);
 
-      await vectorStore.storeMessageEmbedding('msg-neg', 'negative values', negativeEmbedding);
+      await vectorStore.storeMessageEmbedding(204, 'negative values', negativeEmbedding);
 
       const count = vectorStore.getEmbeddingCount();
       expect(count).toBe(1);
@@ -312,7 +329,7 @@ describe('VectorStore', () => {
       for (let i = 0; i < 10; i++) {
         promises.push(
           vectorStore.storeMessageEmbedding(
-            `msg-${i}`,
+            i + 1000,
             `content ${i}`,
             new Float32Array([i / 10, (10 - i) / 10])
           )
@@ -331,7 +348,7 @@ describe('VectorStore', () => {
       vectorStore.clearAllEmbeddings();
 
       const embedding = new Float32Array([1.0, 0.0, 0.0]);
-      await vectorStore.storeMessageEmbedding('msg-1', 'test', embedding);
+      await vectorStore.storeMessageEmbedding(1, 'test', embedding);
 
       const results = await vectorStore.searchMessages(embedding, 1);
 
@@ -341,7 +358,7 @@ describe('VectorStore', () => {
     it('should calculate similarity between orthogonal vectors as 0.0', async () => {
       vectorStore.clearAllEmbeddings();
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'test', new Float32Array([1.0, 0.0]));
+      await vectorStore.storeMessageEmbedding(1, 'test', new Float32Array([1.0, 0.0]));
 
       const queryEmbedding = new Float32Array([0.0, 1.0]);
       const results = await vectorStore.searchMessages(queryEmbedding, 1);
@@ -356,12 +373,12 @@ describe('VectorStore', () => {
       const norm1 = new Float32Array([0.6, 0.8]);
       const norm2 = new Float32Array([0.8, 0.6]);
 
-      await vectorStore.storeMessageEmbedding('msg-1', 'test1', norm1);
-      await vectorStore.storeMessageEmbedding('msg-2', 'test2', norm2);
+      await vectorStore.storeMessageEmbedding(1, 'test1', norm1);
+      await vectorStore.storeMessageEmbedding(2, 'test2', norm2);
 
       const results = await vectorStore.searchMessages(norm1, 2);
 
-      expect(results[0].id).toBe('msg-1');
+      expect(results[0].id).toBe(1);
       expect(results[0].similarity).toBeCloseTo(1.0, 5);
     });
   });

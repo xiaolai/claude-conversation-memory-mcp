@@ -16,6 +16,8 @@ describe("ConversationStorage with Caching", () => {
   let dbPath: string;
   let db: SQLiteManager;
   let storage: ConversationStorage;
+  let conversationIdMap: Map<string, number>;
+  let messageIdMap: Map<string, number>;
 
   beforeEach(async () => {
     // Create temp database
@@ -40,7 +42,7 @@ describe("ConversationStorage with Caching", () => {
     ];
 
     // Store conversations first (foreign key dependency for messages)
-    await storage.storeConversations(conversations);
+    conversationIdMap = await storage.storeConversations(conversations);
 
     // Now store messages (foreign key dependency for file_edits)
     const messages: Message[] = [
@@ -55,7 +57,7 @@ describe("ConversationStorage with Caching", () => {
         metadata: {},
       },
     ];
-    await storage.storeMessages(messages);
+    messageIdMap = await storage.storeMessages(messages, { conversationIdMap });
 
     const fileEdits: FileEdit[] = [
       {
@@ -97,9 +99,10 @@ describe("ConversationStorage with Caching", () => {
     ];
 
     // Note: conversations already stored above
-    await storage.storeFileEdits(fileEdits);
-    await storage.storeDecisions(decisions);
-    await storage.storeGitCommits(commits);
+    await storage.storeFileEdits(fileEdits, conversationIdMap, messageIdMap);
+    await storage.storeDecisions(decisions, { conversationIdMap, messageIdMap });
+    const projectId = storage.getProjectId("/test/project");
+    await storage.storeGitCommits(commits, projectId, conversationIdMap, messageIdMap);
   });
 
   afterEach(() => {
@@ -231,7 +234,7 @@ describe("ConversationStorage with Caching", () => {
       expect(timeline1.edits.length).toBe(1);
 
       // Add message for new edit
-      await storage.storeMessages([
+      const newMessageIdMap = await storage.storeMessages([
         {
           id: "msg2",
           conversation_id: "conv1",
@@ -242,7 +245,12 @@ describe("ConversationStorage with Caching", () => {
           is_sidechain: false,
           metadata: {},
         },
-      ]);
+      ], { conversationIdMap });
+
+      const mergedMessageIdMap = new Map(messageIdMap);
+      for (const [key, value] of newMessageIdMap) {
+        mergedMessageIdMap.set(key, value);
+      }
 
       // Add new file edit
       await storage.storeFileEdits([
@@ -254,7 +262,7 @@ describe("ConversationStorage with Caching", () => {
           snapshot_timestamp: 1700,
           metadata: {},
         },
-      ]);
+      ], conversationIdMap, mergedMessageIdMap);
 
       // Should get fresh data
       const timeline2 = storage.getFileTimeline("/test/file.ts");

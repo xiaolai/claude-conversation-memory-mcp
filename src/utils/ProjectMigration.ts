@@ -4,10 +4,11 @@
  */
 
 import { existsSync, readdirSync, mkdirSync, copyFileSync } from "fs";
-import { join } from "path";
+import { basename, dirname, join } from "path";
 import { homedir } from "os";
-import Database from "better-sqlite3";
-import { pathToProjectFolderName, validateDatabasePath } from "./sanitization.js";
+import { getSQLiteManager, type SQLiteManager } from "../storage/SQLiteManager.js";
+import { getCanonicalProjectPath } from "./worktree.js";
+import { pathToProjectFolderName } from "./sanitization.js";
 
 export interface OldFolder {
   folderPath: string;
@@ -47,11 +48,134 @@ interface ScoreFactors {
 
 export class ProjectMigration {
   private projectsDir: string;
+  private sqliteManager: SQLiteManager;
+  private db: ReturnType<SQLiteManager["getDatabase"]>;
 
-  constructor(_sqliteManager?: unknown, projectsDir?: string) {
-    // Parameter kept for backwards compatibility but not used
+  constructor(sqliteManager?: SQLiteManager, projectsDir?: string) {
+    this.sqliteManager = sqliteManager ?? getSQLiteManager();
+    this.db = this.sqliteManager.getDatabase();
     // Allow override of projects directory for testing
     this.projectsDir = projectsDir || join(homedir(), ".claude", "projects");
+  }
+
+  private buildFolderCandidates(): Map<
+    string,
+    Array<{ projectId: number; path: string }>
+  > {
+    const candidates = new Map<string, Array<{ projectId: number; path: string }>>();
+
+    const addCandidate = (path: string, projectId: number) => {
+      const folderName = pathToProjectFolderName(path);
+      const list = candidates.get(folderName) ?? [];
+      list.push({ projectId, path });
+      candidates.set(folderName, list);
+    };
+
+    try {
+      const projects = this.db
+        .prepare("SELECT id, canonical_path FROM projects")
+        .all() as Array<{ id: number; canonical_path: string }>;
+      for (const project of projects) {
+        addCandidate(project.canonical_path, project.id);
+      }
+
+      const aliases = this.db
+        .prepare("SELECT alias_path, project_id FROM project_aliases")
+        .all() as Array<{ alias_path: string; project_id: number }>;
+      for (const alias of aliases) {
+        addCandidate(alias.alias_path, alias.project_id);
+      }
+    } catch (_error) {
+      // If DB is unavailable, skip DB-backed candidates
+    }
+
+    return candidates;
+  }
+
+  private selectBestCandidate(
+    candidates: Array<{ projectId: number; path: string }>,
+    currentProjectPath?: string
+  ): { projectId: number; path: string } | null {
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    if (!currentProjectPath) {
+      return candidates[0];
+    }
+
+    let best = candidates[0];
+    let bestScore = this.scorePath(currentProjectPath, candidates[0].path);
+
+    for (let i = 1; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      const score = this.scorePath(currentProjectPath, candidate.path);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
+  private getProjectStats(projectId: number): {
+    conversations: number;
+    messages: number;
+    lastActivity: number | null;
+  } {
+    const statsRow = this.db
+      .prepare(
+        `
+        SELECT
+          COUNT(DISTINCT id) as conversations,
+          MAX(last_message_at) as last_activity
+        FROM conversations
+        WHERE project_id = ?
+      `
+      )
+      .get(projectId) as { conversations: number; last_activity: number | null } | undefined;
+
+    const messageRow = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) as count
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.project_id = ?
+      `
+      )
+      .get(projectId) as { count: number } | undefined;
+
+    return {
+      conversations: statsRow?.conversations ?? 0,
+      messages: messageRow?.count ?? 0,
+      lastActivity: statsRow?.last_activity ?? null
+    };
+  }
+
+  private resolveProjectId(projectPath: string): number | null {
+    const canonical = getCanonicalProjectPath(projectPath).canonicalPath;
+
+    const projectRow = this.db
+      .prepare("SELECT id FROM projects WHERE canonical_path = ?")
+      .get(canonical) as { id: number } | undefined;
+    if (projectRow) {
+      return projectRow.id;
+    }
+
+    const aliasRow = this.db
+      .prepare("SELECT project_id FROM project_aliases WHERE alias_path = ?")
+      .get(canonical) as { project_id: number } | undefined;
+    if (aliasRow) {
+      return aliasRow.project_id;
+    }
+
+    const conversationRow = this.db
+      .prepare("SELECT project_id FROM conversations WHERE project_path = ? LIMIT 1")
+      .get(canonical) as { project_id: number } | undefined;
+
+    return conversationRow?.project_id ?? null;
   }
 
   /**
@@ -73,6 +197,8 @@ export class ProjectMigration {
     }
 
     const folders = readdirSync(projectsDir);
+    const expectedFolder = pathToProjectFolderName(currentProjectPath);
+    const folderCandidates = this.buildFolderCandidates();
 
     for (const folder of folders) {
       const folderPath = join(projectsDir, folder);
@@ -82,49 +208,18 @@ export class ProjectMigration {
       let stats = { conversations: 0, messages: 0, lastActivity: null as number | null };
       let pathScore = 0;
 
-      // Strategy 1: Check database for stored project_path
-      if (existsSync(dbPath)) {
-        try {
-          const db = new Database(dbPath, { readonly: true });
+      const candidateList = folderCandidates.get(folder);
+      const bestCandidate = candidateList
+        ? this.selectBestCandidate(candidateList, currentProjectPath)
+        : null;
 
-          // Get stored project path
-          const pathRow = db
-            .prepare("SELECT project_path FROM conversations LIMIT 1")
-            .get() as { project_path: string } | undefined;
-          storedPath = pathRow?.project_path || null;
-
-          // Get statistics
-          const statsRow = db.prepare(`
-            SELECT
-              COUNT(DISTINCT id) as conversations,
-              MAX(last_message_at) as last_activity
-            FROM conversations
-          `).get() as { conversations: number; last_activity: number | null } | undefined;
-
-          const messageCount = db
-            .prepare("SELECT COUNT(*) as count FROM messages")
-            .get() as { count: number } | undefined;
-
-          stats = {
-            conversations: statsRow?.conversations || 0,
-            messages: messageCount?.count || 0,
-            lastActivity: statsRow?.last_activity || null
-          };
-
-          db.close();
-
-          // Score based on path match
-          if (storedPath) {
-            pathScore = this.scorePath(currentProjectPath, storedPath);
-          }
-        } catch (_error) {
-          // Database exists but can't read - still a candidate
-          pathScore = 10;
-        }
+      if (bestCandidate) {
+        storedPath = bestCandidate.path;
+        stats = this.getProjectStats(bestCandidate.projectId);
+        pathScore = this.scorePath(currentProjectPath, bestCandidate.path);
       }
 
       // Strategy 2: Folder name similarity
-      const expectedFolder = pathToProjectFolderName(currentProjectPath);
       const folderScore = this.scoreFolderName(expectedFolder, folder);
 
       // Strategy 3: Check for JSONL files
@@ -168,6 +263,7 @@ export class ProjectMigration {
     mode: "migrate" | "merge" = "migrate"
   ): ValidationResult {
     const errors: string[] = [];
+    let sourceFiles: string[] = [];
 
     // Check source exists
     if (!existsSync(sourceFolder)) {
@@ -176,21 +272,9 @@ export class ProjectMigration {
     }
 
     // Check source has JSONL files
-    const sourceFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
+    sourceFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
     if (sourceFiles.length === 0) {
       errors.push("Source folder has no conversation files");
-    }
-
-    // Check source database is readable
-    const sourceDb = join(sourceFolder, ".cccmemory.db");
-    if (existsSync(sourceDb)) {
-      try {
-        const db = new Database(sourceDb, { readonly: true });
-        db.prepare("SELECT 1 FROM conversations LIMIT 1").get();
-        db.close();
-      } catch (_error) {
-        errors.push("Source database is corrupted or unreadable");
-      }
     }
 
     // Check target doesn't have data (conflict detection) - ONLY for migrate mode
@@ -203,25 +287,12 @@ export class ProjectMigration {
 
     // Get statistics if validation passed so far
     let stats: { conversations: number; messages: number; files: number } | undefined;
-    if (errors.length === 0 && existsSync(sourceDb)) {
-      try {
-        const db = new Database(sourceDb, { readonly: true });
-        const convCount = db
-          .prepare("SELECT COUNT(*) as count FROM conversations")
-          .get() as { count: number };
-        const msgCount = db
-          .prepare("SELECT COUNT(*) as count FROM messages")
-          .get() as { count: number };
-        db.close();
-
-        stats = {
-          conversations: convCount.count,
-          messages: msgCount.count,
-          files: sourceFiles.length
-        };
-      } catch (_error) {
-        // Can't get stats, but not a blocker
-      }
+    if (errors.length === 0) {
+      stats = {
+        conversations: sourceFiles.length,
+        messages: 0,
+        files: sourceFiles.length
+      };
     }
 
     return {
@@ -262,65 +333,39 @@ export class ProjectMigration {
       mkdirSync(targetFolder, { recursive: true });
     }
 
-    const sourceDb = join(sourceFolder, ".cccmemory.db");
-    const targetDb = join(targetFolder, ".cccmemory.db");
+    const filesCopied =
+      mode === "merge"
+        ? this.copyNewJsonlFiles(sourceFolder, targetFolder)
+        : this.copyAllJsonlFiles(sourceFolder, targetFolder);
 
-    // Branch based on mode
-    if (mode === "merge") {
-      return this.executeMerge(
-        sourceFolder,
-        targetFolder,
-        sourceDb,
-        targetDb,
-        oldProjectPath,
-        newProjectPath
-      );
-    } else {
-      // Original migrate logic (replace target)
-      // Copy all JSONL files
-      const jsonlFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
-      let filesCopied = 0;
+    const databaseUpdated = this.updateProjectReferences(oldProjectPath, newProjectPath);
 
-      for (const file of jsonlFiles) {
-        const sourcePath = join(sourceFolder, file);
-        const targetPath = join(targetFolder, file);
-        copyFileSync(sourcePath, targetPath);
-        filesCopied++;
-      }
-
-      if (existsSync(sourceDb)) {
-        // Create backup
-        const backupPath = join(sourceFolder, ".cccmemory.db.bak");
-        copyFileSync(sourceDb, backupPath);
-
-        // Copy database
-        copyFileSync(sourceDb, targetDb);
-
-        // Update project_path in the copied database
-        this.updateProjectPaths(targetDb, oldProjectPath, newProjectPath);
-      }
-
-      return {
-        success: true,
-        filesCopied,
-        databaseUpdated: true,
-        message: `Migrated ${filesCopied} conversation files`
-      };
-    }
+    return {
+      success: true,
+      filesCopied,
+      databaseUpdated,
+      message:
+        mode === "merge"
+          ? `Merged ${filesCopied} new conversation files into target`
+          : `Migrated ${filesCopied} conversation files`
+    };
   }
 
-  /**
-   * Execute merge (combine source into existing target)
-   */
-  private executeMerge(
-    sourceFolder: string,
-    targetFolder: string,
-    sourceDb: string,
-    targetDb: string,
-    oldProjectPath: string,
-    newProjectPath: string
-  ): MigrationResult {
-    // Copy only JSONL files that don't exist in target (skip duplicates)
+  private copyAllJsonlFiles(sourceFolder: string, targetFolder: string): number {
+    const jsonlFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
+    let filesCopied = 0;
+
+    for (const file of jsonlFiles) {
+      const sourcePath = join(sourceFolder, file);
+      const targetPath = join(targetFolder, file);
+      copyFileSync(sourcePath, targetPath);
+      filesCopied++;
+    }
+
+    return filesCopied;
+  }
+
+  private copyNewJsonlFiles(sourceFolder: string, targetFolder: string): number {
     const sourceFiles = readdirSync(sourceFolder).filter(f => f.endsWith(".jsonl"));
     const existingFiles = existsSync(targetFolder)
       ? readdirSync(targetFolder).filter(f => f.endsWith(".jsonl"))
@@ -337,136 +382,82 @@ export class ProjectMigration {
       }
     }
 
-    // Merge databases
-    if (existsSync(sourceDb)) {
-      if (existsSync(targetDb)) {
-        // Backup target database before merge
-        const backupPath = join(targetFolder, ".cccmemory.db.bak");
-        copyFileSync(targetDb, backupPath);
-
-        // Merge source into target
-        this.mergeDatabase(sourceDb, targetDb, oldProjectPath, newProjectPath);
-      } else {
-        // No target database yet, just copy
-        copyFileSync(sourceDb, targetDb);
-        this.updateProjectPaths(targetDb, oldProjectPath, newProjectPath);
-      }
-    }
-
-    return {
-      success: true,
-      filesCopied,
-      databaseUpdated: true,
-      message: `Merged ${filesCopied} new conversation files into target`
-    };
+    return filesCopied;
   }
 
-  /**
-   * Merge source database into target database (INSERT OR IGNORE strategy)
-   */
-  private mergeDatabase(
-    sourceDbPath: string,
-    targetDbPath: string,
-    oldProjectPath: string,
-    newProjectPath: string
-  ): void {
-    // Check which tables exist BEFORE attaching
-    const source = new Database(sourceDbPath, { readonly: true });
-    const sourceTables = new Set(
-      (
-        source.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
-      ).map(row => row.name)
-    );
-    source.close();
-
-    const target = new Database(targetDbPath);
-    const targetTables = new Set(
-      (
-        target.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
-      ).map(row => row.name)
-    );
-
-    try {
-      target.exec("BEGIN TRANSACTION");
-
-      // Attach source database (validate path to prevent SQL injection)
-      const safeSourcePath = validateDatabasePath(sourceDbPath);
-      target.exec(`ATTACH DATABASE '${safeSourcePath}' AS source`);
-
-      // Merge conversations (always exists)
-      target.exec(`
-        INSERT OR IGNORE INTO conversations
-        SELECT * FROM source.conversations
-      `);
-
-      // Merge other tables only if they exist in both databases
-      const tablesToMerge = [
-        "messages",
-        "tool_uses",
-        "decisions",
-        "mistakes",
-        "requirements",
-        "file_evolution",
-        "git_commits"
-      ];
-
-      for (const table of tablesToMerge) {
-        if (sourceTables.has(table) && targetTables.has(table)) {
-          target.exec(`
-            INSERT OR IGNORE INTO ${table}
-            SELECT * FROM source.${table}
-          `);
-        }
-      }
-
-      // Update project_path for newly merged conversations from source
-      const stmt = target.prepare(`
-        UPDATE conversations
-        SET project_path = ?
-        WHERE project_path = ?
-      `);
-      stmt.run(newProjectPath, oldProjectPath);
-
-      target.exec("COMMIT");
-
-      // Detach source after commit
-      target.exec("DETACH DATABASE source");
-    } catch (error) {
-      try {
-        target.exec("ROLLBACK");
-      } catch (_rollbackError) {
-        // Rollback might fail if transaction already ended
-      }
-      throw error;
-    } finally {
-      target.close();
+  private backupDatabase(): string {
+    const dbPath = this.sqliteManager.getDbPath();
+    if (dbPath === ":memory:") {
+      return dbPath;
     }
+    const backupName = `${basename(dbPath)}.bak.${Date.now()}`;
+    const backupPath = join(dirname(dbPath), backupName);
+
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    this.db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);
+
+    return backupPath;
   }
 
-  /**
-   * Update project_path in database (with transaction)
-   */
-  private updateProjectPaths(dbPath: string, oldPath: string, newPath: string): void {
-    const db = new Database(dbPath);
+  private updateProjectReferences(oldPath: string, newPath: string): boolean {
+    const canonicalOld = getCanonicalProjectPath(oldPath).canonicalPath;
+    const canonicalNew = getCanonicalProjectPath(newPath).canonicalPath;
 
-    try {
-      db.exec("BEGIN TRANSACTION");
-
-      const stmt = db.prepare("UPDATE conversations SET project_path = ? WHERE project_path = ?");
-      const result = stmt.run(newPath, oldPath);
-
-      if (result.changes === 0) {
-        throw new Error("No conversations updated - path mismatch");
-      }
-
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      db.close();
-      throw error;
+    if (canonicalOld === canonicalNew) {
+      return false;
     }
 
-    db.close();
+    const projectId = this.resolveProjectId(canonicalOld);
+    if (!projectId) {
+      return false;
+    }
+
+    const existingNew = this.resolveProjectId(canonicalNew);
+    if (existingNew && existingNew !== projectId) {
+      throw new Error(
+        `Target project path already exists in database: ${canonicalNew}. ` +
+          "Resolve duplicate projects before migrating."
+      );
+    }
+
+    const now = Date.now();
+    this.backupDatabase();
+
+    try {
+      this.db.exec("BEGIN TRANSACTION");
+
+      this.db
+        .prepare("UPDATE projects SET canonical_path = ?, display_path = ?, updated_at = ? WHERE id = ?")
+        .run(canonicalNew, canonicalNew, now, projectId);
+
+      this.db
+        .prepare("UPDATE conversations SET project_path = ? WHERE project_id = ?")
+        .run(canonicalNew, projectId);
+
+      this.db
+        .prepare("UPDATE working_memory SET project_path = ? WHERE project_path = ?")
+        .run(canonicalNew, canonicalOld);
+
+      this.db
+        .prepare("UPDATE session_handoffs SET project_path = ? WHERE project_path = ?")
+        .run(canonicalNew, canonicalOld);
+
+      this.db
+        .prepare("UPDATE session_checkpoints SET project_path = ? WHERE project_path = ?")
+        .run(canonicalNew, canonicalOld);
+
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO project_aliases (alias_path, project_id, created_at) VALUES (?, ?, ?)"
+        )
+        .run(canonicalOld, projectId, now);
+
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   /**

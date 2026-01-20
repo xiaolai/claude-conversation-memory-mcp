@@ -48,37 +48,6 @@ export interface CodeData {
   clones: CodeClone[];
 }
 
-// Raw data types from CODE-GRAPH-RAG-MCP
-export interface RawEntity {
-  id?: string;
-  name?: string;
-  type?: string;
-  filePath?: string;
-  file?: string;
-  lineNumber?: number;
-  line?: number;
-  complexity?: number;
-  description?: string;
-}
-
-export interface RawHotspot {
-  filePath?: string;
-  file?: string;
-  path?: string;
-  complexity?: number;
-  score?: number;
-  changeCount?: number;
-  changes?: number;
-  metric?: string;
-}
-
-export interface RawClone {
-  files?: string[];
-  similarity?: number;
-  score?: number;
-  description?: string;
-}
-
 // ==================== Conversation Analysis Types ====================
 
 export interface Decision {

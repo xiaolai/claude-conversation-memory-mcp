@@ -871,9 +871,18 @@ export class ConversationParser {
     messages: ConversationMessage[],
     result: ParseResult
   ): void {
+    // Only store tool calls for messages that will be stored (FK to messages)
+    const storedMessageIds = new Set(result.messages.map((m) => m.id));
+    const toolUseIds = new Set<string>();
+
     for (const msg of messages) {
       const messageData = msg.message as MessageData | undefined;
-      if (!messageData?.content || !Array.isArray(messageData.content) || !msg.uuid) {
+      if (
+        !messageData?.content ||
+        !Array.isArray(messageData.content) ||
+        !msg.uuid ||
+        !storedMessageIds.has(msg.uuid)
+      ) {
         continue;
       }
 
@@ -886,24 +895,51 @@ export class ConversationParser {
 
         // Tool use
         if (contentItem.type === "tool_use") {
+          if (!contentItem.id) {continue;}
           const toolUse: ToolUse = {
-            id: contentItem.id || "",
+            id: contentItem.id,
             message_id: msg.uuid,
             tool_name: contentItem.name || "",
             tool_input: contentItem.input || {},
             timestamp,
           };
+          toolUseIds.add(toolUse.id);
           result.tool_uses.push(toolUse);
         }
+      }
+    }
 
-        // Tool result
+    // Second pass: Tool results (require valid tool_use_id to avoid FK errors)
+    for (const msg of messages) {
+      const messageData = msg.message as MessageData | undefined;
+      if (
+        !messageData?.content ||
+        !Array.isArray(messageData.content) ||
+        !msg.uuid ||
+        !storedMessageIds.has(msg.uuid)
+      ) {
+        continue;
+      }
+
+      const timestamp = msg.timestamp
+        ? new Date(msg.timestamp).getTime()
+        : Date.now();
+
+      for (const item of messageData.content) {
+        const contentItem = item as ContentItem;
+
         if (contentItem.type === "tool_result") {
+          const toolUseId = contentItem.tool_use_id;
+          if (!toolUseId || !toolUseIds.has(toolUseId)) {continue;}
+
           const toolUseResult = msg.toolUseResult as ToolUseResultData | undefined;
           const toolResult: ToolResult = {
             id: nanoid(),
-            tool_use_id: contentItem.tool_use_id || "",
+            tool_use_id: toolUseId,
             message_id: msg.uuid,
-            content: typeof contentItem.content === "string" ? contentItem.content : JSON.stringify(contentItem.content),
+            content: typeof contentItem.content === "string"
+              ? contentItem.content
+              : JSON.stringify(contentItem.content),
             is_error: contentItem.is_error || false,
             stdout: toolUseResult?.stdout,
             stderr: toolUseResult?.stderr,

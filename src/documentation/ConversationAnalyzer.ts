@@ -35,9 +35,21 @@ export class ConversationAnalyzer {
 
   private getDecisions(projectPath: string, sessionId?: string): Decision[] {
     let sql = `
-      SELECT d.*
+      SELECT
+        d.external_id as decision_external_id,
+        d.decision_text,
+        d.rationale,
+        d.alternatives_considered,
+        d.rejected_reasons,
+        d.context,
+        d.related_files,
+        d.related_commits,
+        d.timestamp,
+        c.external_id as conversation_external_id,
+        m.external_id as message_external_id
       FROM decisions d
       JOIN conversations c ON d.conversation_id = c.id
+      LEFT JOIN messages m ON d.message_id = m.id
       WHERE c.project_path = ?
     `;
 
@@ -49,27 +61,43 @@ export class ConversationAnalyzer {
 
     const stmt = this.db.getDatabase().prepare(sql);
     const rows = sessionId
-      ? stmt.all(projectPath, sessionId) as DecisionRow[]
-      : stmt.all(projectPath) as DecisionRow[];
+      ? stmt.all(projectPath, sessionId) as Array<DecisionRow & { conversation_external_id: string; message_external_id: string | null; decision_external_id: string }>
+      : stmt.all(projectPath) as Array<DecisionRow & { conversation_external_id: string; message_external_id: string | null; decision_external_id: string }>;
 
-    return rows.map((row) => ({
-      id: row.id,
-      conversation_id: row.conversation_id,
-      message_id: row.message_id,
-      decision_text: row.decision_text,
-      rationale: row.rationale || '',
-      alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
-      rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
-      context: row.context,
-      related_files: safeJsonParse<string[]>(row.related_files, []),
-      related_commits: safeJsonParse<string[]>(row.related_commits, []),
-      timestamp: row.timestamp
-    }));
+    const results: Decision[] = [];
+    for (const row of rows) {
+      if (!row.message_external_id) {
+        continue;
+      }
+      results.push({
+        id: row.decision_external_id,
+        conversation_id: row.conversation_external_id,
+        message_id: row.message_external_id,
+        decision_text: row.decision_text,
+        rationale: row.rationale || '',
+        alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+        rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+        context: row.context,
+        related_files: safeJsonParse<string[]>(row.related_files, []),
+        related_commits: safeJsonParse<string[]>(row.related_commits, []),
+        timestamp: row.timestamp
+      });
+    }
+
+    return results;
   }
 
   private getMistakes(projectPath: string, sessionId?: string): Mistake[] {
     let sql = `
-      SELECT m.*
+      SELECT
+        m.external_id as mistake_external_id,
+        m.mistake_type,
+        m.what_went_wrong,
+        m.correction,
+        m.user_correction_message,
+        m.files_affected,
+        m.timestamp,
+        c.external_id as conversation_external_id
       FROM mistakes m
       JOIN conversations c ON m.conversation_id = c.id
       WHERE c.project_path = ?
@@ -83,12 +111,12 @@ export class ConversationAnalyzer {
 
     const stmt = this.db.getDatabase().prepare(sql);
     const rows = sessionId
-      ? stmt.all(projectPath, sessionId) as MistakeRow[]
-      : stmt.all(projectPath) as MistakeRow[];
+      ? stmt.all(projectPath, sessionId) as Array<MistakeRow & { conversation_external_id: string; mistake_external_id: string }>
+      : stmt.all(projectPath) as Array<MistakeRow & { conversation_external_id: string; mistake_external_id: string }>;
 
     return rows.map((row) => ({
-      id: row.id,
-      conversation_id: row.conversation_id,
+      id: row.mistake_external_id,
+      conversation_id: row.conversation_external_id,
       what_went_wrong: row.what_went_wrong,
       why_it_happened: '',
       how_it_was_fixed: row.correction || '',
@@ -101,7 +129,13 @@ export class ConversationAnalyzer {
 
   private getRequirements(projectPath: string, sessionId?: string): Requirement[] {
     let sql = `
-      SELECT r.*
+      SELECT
+        r.external_id as requirement_external_id,
+        r.type,
+        r.description,
+        r.rationale,
+        r.affects_components,
+        r.timestamp
       FROM requirements r
       JOIN conversations c ON r.conversation_id = c.id
       WHERE c.project_path = ?
@@ -115,11 +149,11 @@ export class ConversationAnalyzer {
 
     const stmt = this.db.getDatabase().prepare(sql);
     const rows = sessionId
-      ? stmt.all(projectPath, sessionId) as RequirementRow[]
-      : stmt.all(projectPath) as RequirementRow[];
+      ? stmt.all(projectPath, sessionId) as Array<RequirementRow & { requirement_external_id: string }>
+      : stmt.all(projectPath) as Array<RequirementRow & { requirement_external_id: string }>;
 
     return rows.map((row) => ({
-      id: row.id,
+      id: row.requirement_external_id,
       requirement_type: row.type,
       description: row.description,
       rationale: row.rationale || '',
@@ -130,7 +164,11 @@ export class ConversationAnalyzer {
 
   private getFileEdits(projectPath: string, sessionId?: string): FileEdit[] {
     let sql = `
-      SELECT fe.*
+      SELECT
+        fe.external_id as edit_external_id,
+        fe.file_path,
+        fe.snapshot_timestamp,
+        c.external_id as conversation_external_id
       FROM file_edits fe
       JOIN conversations c ON fe.conversation_id = c.id
       WHERE c.project_path = ?
@@ -148,8 +186,8 @@ export class ConversationAnalyzer {
       : stmt.all(projectPath) as Array<Record<string, unknown>>;
 
     return rows.map((row) => ({
-      id: row.id as string,
-      conversation_id: row.conversation_id as string,
+      id: row.edit_external_id as string,
+      conversation_id: row.conversation_external_id as string,
       file_path: row.file_path as string,
       edit_type: 'backup', // All file_edits are backups based on schema
       timestamp: row.snapshot_timestamp as number
@@ -158,9 +196,15 @@ export class ConversationAnalyzer {
 
   private getGitCommits(projectPath: string, sessionId?: string): GitCommit[] {
     let sql = `
-      SELECT gc.*
+      SELECT
+        gc.hash,
+        gc.message,
+        gc.author,
+        gc.timestamp,
+        gc.files_changed,
+        c.external_id as conversation_external_id
       FROM git_commits gc
-      JOIN conversations c ON gc.conversation_id = c.id
+      LEFT JOIN conversations c ON gc.conversation_id = c.id
       WHERE c.project_path = ?
     `;
 
@@ -172,12 +216,12 @@ export class ConversationAnalyzer {
 
     const stmt = this.db.getDatabase().prepare(sql);
     const rows = sessionId
-      ? stmt.all(projectPath, sessionId) as GitCommitRow[]
-      : stmt.all(projectPath) as GitCommitRow[];
+      ? stmt.all(projectPath, sessionId) as Array<GitCommitRow & { conversation_external_id: string | null }>
+      : stmt.all(projectPath) as Array<GitCommitRow & { conversation_external_id: string | null }>;
 
     return rows.map((row) => ({
       hash: row.hash,
-      conversation_id: row.conversation_id || '',
+      conversation_id: row.conversation_external_id || '',
       message: row.message,
       author: row.author || 'Unknown',
       timestamp: row.timestamp,

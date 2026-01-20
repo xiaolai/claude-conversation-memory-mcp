@@ -288,7 +288,7 @@ Set `OPENAI_API_KEY` environment variable.
 | `discover_old_conversations` | Find folders from renamed projects |
 | `migrate_project` | Migrate/merge conversation history |
 | `forget_by_topic` | Delete conversations by keyword |
-| `generate_documentation` | Generate docs from conversations |
+| `generate_documentation` | Generate docs from local code scan + conversations |
 
 ### Session IDs
 

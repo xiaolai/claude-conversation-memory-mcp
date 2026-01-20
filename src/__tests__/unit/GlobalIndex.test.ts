@@ -3,23 +3,27 @@
  */
 
 import { GlobalIndex } from "../../storage/GlobalIndex.js";
+import { SQLiteManager } from "../../storage/SQLiteManager.js";
 import { rmSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
 describe("GlobalIndex", () => {
   let testDbPath: string;
+  let db: SQLiteManager;
   let globalIndex: GlobalIndex;
 
   beforeEach(() => {
     // Use temporary database path for tests
     testDbPath = join(tmpdir(), `global-index-test-${Date.now()}.db`);
-    globalIndex = new GlobalIndex(testDbPath);
+    db = new SQLiteManager({ dbPath: testDbPath });
+    globalIndex = new GlobalIndex(db);
   });
 
   afterEach(() => {
     // Cleanup
     globalIndex.close();
+    db.close();
     if (existsSync(testDbPath)) {
       rmSync(testDbPath, { force: true });
     }
@@ -37,7 +41,6 @@ describe("GlobalIndex", () => {
       const project = globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.cccmemory.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -54,7 +57,6 @@ describe("GlobalIndex", () => {
       const project = globalIndex.registerProject({
         project_path: "/home/user/.codex",
         source_type: "codex",
-        db_path: "/home/user/.codex/.cccmemory.db",
         message_count: 200,
         conversation_count: 20,
         decision_count: 15,
@@ -70,7 +72,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -81,7 +82,6 @@ describe("GlobalIndex", () => {
       const updated = globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.db",
         message_count: 150,
         conversation_count: 15,
         decision_count: 8,
@@ -105,7 +105,6 @@ describe("GlobalIndex", () => {
       const project = globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -123,7 +122,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project1",
         source_type: "claude-code",
-        db_path: "/test/project1/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -133,7 +131,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project2",
         source_type: "claude-code",
-        db_path: "/test/project2/.db",
         message_count: 200,
         conversation_count: 20,
         decision_count: 10,
@@ -143,7 +140,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/home/user/.codex",
         source_type: "codex",
-        db_path: "/home/user/.codex/.db",
         message_count: 300,
         conversation_count: 30,
         decision_count: 15,
@@ -175,7 +171,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -209,7 +204,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project1",
         source_type: "claude-code",
-        db_path: "/test/project1/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -219,7 +213,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project2",
         source_type: "claude-code",
-        db_path: "/test/project2/.db",
         message_count: 200,
         conversation_count: 20,
         decision_count: 10,
@@ -229,7 +222,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/home/user/.codex",
         source_type: "codex",
-        db_path: "/home/user/.codex/.db",
         message_count: 300,
         conversation_count: 30,
         decision_count: 15,
@@ -252,7 +244,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -297,7 +288,6 @@ describe("GlobalIndex", () => {
       globalIndex.registerProject({
         project_path: "/test/project",
         source_type: "claude-code",
-        db_path: "/test/project/.db",
         message_count: 100,
         conversation_count: 10,
         decision_count: 5,
@@ -305,15 +295,18 @@ describe("GlobalIndex", () => {
       });
 
       globalIndex.close();
+      db.close();
 
       // Create new instance with same path
-      const newIndex = new GlobalIndex(testDbPath);
+      const newDb = new SQLiteManager({ dbPath: testDbPath });
+      const newIndex = new GlobalIndex(newDb);
 
       const project = newIndex.getProject("/test/project");
       expect(project).toBeDefined();
       expect(project?.message_count).toBe(100);
 
       newIndex.close();
+      newDb.close();
     });
   });
 });

@@ -1700,9 +1700,8 @@ export class ToolHandlers {
    * Generate comprehensive project documentation by combining codebase analysis
    * with conversation history.
    *
-   * Creates documentation that shows WHAT exists in the code (via CODE-GRAPH-RAG-MCP)
-   * and WHY it was built that way (via conversation history). Requires CODE-GRAPH-RAG-MCP
-   * to be indexed first.
+   * Creates documentation that shows WHAT exists in the code (via local code scanning)
+   * and WHY it was built that way (via conversation history).
    *
    * @param args - Documentation generation arguments:
    * - `project_path`: Path to the project (defaults to cwd)
@@ -1744,17 +1743,6 @@ export class ToolHandlers {
     const moduleFilter = typedArgs.module_filter;
 
     console.error('\n📚 Starting documentation generation...');
-    console.error(`Note: This tool requires CODE-GRAPH-RAG-MCP to be indexed first.`);
-    console.error(`Please ensure you have run code-graph-rag index on this project.`);
-
-    // Note: In a real implementation, we would call CODE-GRAPH-RAG-MCP tools here
-    // For now, we'll create a placeholder that shows the structure
-    const codeGraphData = {
-      entities: [],
-      hotspots: [],
-      clones: [],
-      graph: {}
-    };
 
     const generator = new DocumentationGenerator(this.db);
     const documentation = await generator.generate(
@@ -1763,8 +1751,7 @@ export class ToolHandlers {
         sessionId,
         scope,
         moduleFilter
-      },
-      codeGraphData
+      }
     );
 
     // Extract statistics from the generated documentation

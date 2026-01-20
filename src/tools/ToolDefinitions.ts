@@ -34,7 +34,7 @@ export const TOOLS = {
         },
         exclude_mcp_servers: {
           type: "array",
-          description: "List of specific MCP server names to exclude (e.g., ['cccmemory', 'code-graph-rag']). More granular than exclude_mcp_conversations.",
+          description: "List of specific MCP server names to exclude (e.g., ['cccmemory', 'filesystem']). More granular than exclude_mcp_conversations.",
           items: { type: "string" },
         },
       },
@@ -454,7 +454,7 @@ export const TOOLS = {
 
   generate_documentation: {
     name: "generate_documentation",
-    description: "Generate comprehensive project documentation by combining codebase analysis (CODE-GRAPH-RAG-MCP) with conversation history. Shows WHAT exists in code and WHY it was built that way.",
+    description: "Generate comprehensive project documentation by combining local codebase analysis with conversation history. Shows WHAT exists in code and WHY it was built that way.",
     inputSchema: {
       type: "object",
       properties: {

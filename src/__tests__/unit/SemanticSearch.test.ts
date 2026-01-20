@@ -5,8 +5,6 @@
 import { jest } from '@jest/globals';
 import { SemanticSearch } from '../../search/SemanticSearch';
 import { getSQLiteManager, resetSQLiteManager } from '../../storage/SQLiteManager';
-import type { Message } from '../../parsers/ConversationParser';
-import type { Decision } from '../../parsers/DecisionExtractor';
 
 // Skip Transformers tests in CI due to environment compatibility issues
 // Also skip on macOS ARM64 where ONNX runtime has known compatibility issues
@@ -50,27 +48,9 @@ describe('SemanticSearch', () => {
   // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
   (skipTransformers ? describe.skip : describe)('indexMessages', () => {
     it('should index messages with content', async () => {
-      const messages: Message[] = [
-        {
-          id: 'msg-1',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'user',
-          content: 'Hello world',
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
-        {
-          id: 'msg-2',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'assistant',
-          content: 'Hi there',
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
+      const messages = [
+        { id: 1, content: 'Hello world' },
+        { id: 2, content: 'Hi there' },
       ];
 
       // Should handle gracefully even if embeddings not available
@@ -82,27 +62,9 @@ describe('SemanticSearch', () => {
     });
 
     it('should handle messages without content', async () => {
-      const messages: Message[] = [
-        {
-          id: 'msg-2',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
-        {
-          id: 'msg-3',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'assistant',
-          content: undefined,
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
+      const messages = [
+        { id: 1, content: '' },
+        { id: 2, content: undefined },
       ];
 
       await expect(semanticSearch.indexMessages(messages)).resolves.not.toThrow();
@@ -112,19 +74,12 @@ describe('SemanticSearch', () => {
   // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
   (skipTransformers ? describe.skip : describe)('indexDecisions', () => {
     it('should index decisions', async () => {
-      const decisions: Decision[] = [
+      const decisions = [
         {
-          id: 'dec-1',
-          conversation_id: 'conv-1',
-          message_id: 'msg-1',
+          id: 1,
           decision_text: 'Use PostgreSQL',
           rationale: 'Better for structured data',
           context: 'Database selection',
-          alternatives_considered: ['MongoDB'],
-          rejected_reasons: {},
-          related_files: [],
-          related_commits: [],
-          timestamp: Date.now(),
         },
       ];
 
@@ -136,19 +91,12 @@ describe('SemanticSearch', () => {
     });
 
     it('should handle decisions with minimal data', async () => {
-      const decisions: Decision[] = [
+      const decisions = [
         {
-          id: 'dec-1',
-          conversation_id: 'conv-1',
-          message_id: 'msg-1',
+          id: 1,
           decision_text: 'Use PostgreSQL',
           rationale: undefined,
           context: undefined,
-          alternatives_considered: [],
-          rejected_reasons: {},
-          related_files: [],
-          related_commits: [],
-          timestamp: Date.now(),
         },
       ];
 
@@ -182,61 +130,25 @@ describe('SemanticSearch', () => {
   (skipTransformers ? describe.skip : describe)('Edge Cases', () => {
     it('should handle messages with very long content', async () => {
       const longContent = 'a'.repeat(10000);
-      const messages: Message[] = [
-        {
-          id: 'msg-1',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'user',
-          content: longContent,
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
+      const messages = [
+        { id: 1, content: longContent },
       ];
 
       await expect(semanticSearch.indexMessages(messages)).resolves.not.toThrow();
     });
 
     it('should handle messages with special characters', async () => {
-      const messages: Message[] = [
-        {
-          id: 'msg-1',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'user',
-          content: '你好 🎉 "quotes" \'single\'',
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
+      const messages = [
+        { id: 1, content: '你好 🎉 "quotes" \'single\'' },
       ];
 
       await expect(semanticSearch.indexMessages(messages)).resolves.not.toThrow();
     });
 
     it('should handle concurrent indexing', async () => {
-      const messages: Message[] = [
-        {
-          id: 'msg-1',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'user',
-          content: 'Message 1',
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
-        {
-          id: 'msg-2',
-          conversation_id: 'conv-1',
-          message_type: 'text',
-          role: 'user',
-          content: 'Message 2',
-          timestamp: Date.now(),
-          is_sidechain: false,
-          metadata: {},
-        },
+      const messages = [
+        { id: 1, content: 'Message 1' },
+        { id: 2, content: 'Message 2' },
       ];
 
       const promises = [

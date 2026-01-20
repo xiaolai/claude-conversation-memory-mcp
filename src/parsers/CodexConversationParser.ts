@@ -23,7 +23,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from "fs";
-import { join } from "path";
+import { isAbsolute, join, resolve } from "path";
 import { nanoid } from "nanoid";
 import type {
   Conversation,
@@ -34,6 +34,7 @@ import type {
   ThinkingBlock,
   ParseResult,
 } from "./ConversationParser.js";
+import { getCanonicalProjectPath } from "../utils/worktree.js";
 
 // Codex-specific type definitions
 interface CodexEntry {
@@ -80,6 +81,46 @@ interface CodexContentItem {
  * so they can be stored in the same database and searched together.
  */
 export class CodexConversationParser {
+  private cwdCache = new Map<string, { canonicalPath: string; isGitRepo: boolean }>();
+
+  private resolveProjectPath(
+    cwd: string | undefined,
+    codexPath: string
+  ): { rawCwd?: string; projectPath: string; isGitRepo: boolean } {
+    if (!cwd) {
+      return { projectPath: codexPath, isGitRepo: false };
+    }
+
+    const rawCwd = cwd.trim();
+    if (!rawCwd) {
+      return { projectPath: codexPath, isGitRepo: false };
+    }
+
+    const resolvedCwd = isAbsolute(rawCwd) ? resolve(rawCwd) : resolve(codexPath, rawCwd);
+    const cached = this.cwdCache.get(resolvedCwd);
+    if (cached) {
+      return { rawCwd: resolvedCwd, projectPath: cached.canonicalPath, isGitRepo: cached.isGitRepo };
+    }
+
+    const { canonicalPath, isGitRepo } = getCanonicalProjectPath(resolvedCwd);
+    this.cwdCache.set(resolvedCwd, { canonicalPath, isGitRepo });
+    return { rawCwd: resolvedCwd, projectPath: canonicalPath, isGitRepo };
+  }
+
+  private findCwd(entries: CodexEntry[]): string | undefined {
+    for (const entry of entries) {
+      const payload = entry.payload as { cwd?: unknown } | undefined;
+      if (!payload || typeof payload.cwd !== "string") {
+        continue;
+      }
+      const trimmed = payload.cwd.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+    return undefined;
+  }
+
   /**
    * Parse all Codex sessions.
    *
@@ -262,11 +303,13 @@ export class CodexConversationParser {
     const sessionMeta = sessionMetaEntry.payload as unknown as CodexSessionMeta;
     const sessionId = sessionMeta.id;
     const sessionTimestamp = new Date(sessionMeta.timestamp).getTime();
+    const inferredCwd = sessionMeta.cwd || this.findCwd(entries);
+    const { rawCwd, projectPath, isGitRepo } = this.resolveProjectPath(inferredCwd, codexPath);
 
     // Create conversation record
     const conversation: Conversation = {
       id: sessionId,
-      project_path: sessionMeta.cwd || codexPath,
+      project_path: projectPath,
       source_type: "codex",
       first_message_at: sessionTimestamp,
       last_message_at: sessionTimestamp,
@@ -279,6 +322,9 @@ export class CodexConversationParser {
         model_provider: sessionMeta.model_provider,
         git_commit: sessionMeta.git?.commit_hash,
         git_repo: sessionMeta.git?.repository_url,
+        cwd: rawCwd,
+        canonical_project_path: projectPath,
+        is_git_repo: isGitRepo,
       },
       created_at: sessionTimestamp,
       updated_at: sessionTimestamp,

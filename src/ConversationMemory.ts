@@ -60,7 +60,7 @@ export interface IndexOptions {
   /**
    * List of specific MCP server names to exclude.
    * More granular than `excludeMcpConversations`.
-   * @example ['cccmemory', 'code-graph-rag']
+   * @example ['cccmemory', 'filesystem']
    */
   excludeMcpServers?: string[];
 
@@ -172,15 +172,18 @@ export class ConversationMemory {
     }
 
     // Store basic entities (skip FTS rebuild for performance, will rebuild once at end)
-    await this.storage.storeConversations(parseResult.conversations);
-    await this.storage.storeMessages(parseResult.messages, true);
-    await this.storage.storeToolUses(parseResult.tool_uses);
-    await this.storage.storeToolResults(parseResult.tool_results);
-    await this.storage.storeFileEdits(parseResult.file_edits);
+    const conversationIdMap = await this.storage.storeConversations(parseResult.conversations);
+    const messageIdMap = await this.storage.storeMessages(parseResult.messages, {
+      skipFtsRebuild: true,
+      conversationIdMap,
+    });
+    const toolUseIdMap = await this.storage.storeToolUses(parseResult.tool_uses, messageIdMap);
+    await this.storage.storeToolResults(parseResult.tool_results, messageIdMap, toolUseIdMap);
+    await this.storage.storeFileEdits(parseResult.file_edits, conversationIdMap, messageIdMap);
 
     // Only store thinking blocks if explicitly enabled (default: false for privacy)
     if (options.includeThinking === true) {
-      await this.storage.storeThinkingBlocks(parseResult.thinking_blocks);
+      await this.storage.storeThinkingBlocks(parseResult.thinking_blocks, messageIdMap);
     }
 
     // Extract decisions
@@ -189,7 +192,11 @@ export class ConversationMemory {
       parseResult.messages,
       parseResult.thinking_blocks
     );
-    await this.storage.storeDecisions(decisions, true);
+    const decisionIdMap = await this.storage.storeDecisions(decisions, {
+      skipFtsRebuild: true,
+      conversationIdMap,
+      messageIdMap,
+    });
 
     // Rebuild FTS indexes once after all data is stored
     this.storage.rebuildAllFts();
@@ -200,21 +207,21 @@ export class ConversationMemory {
       parseResult.messages,
       parseResult.tool_results
     );
-    await this.storage.storeMistakes(mistakes);
+    const mistakeIdMap = await this.storage.storeMistakes(mistakes, conversationIdMap, messageIdMap);
 
     // Extract requirements and validations
     console.error("\n=== Extracting Requirements ===");
     const requirements = this.requirementsExtractor.extractRequirements(
       parseResult.messages
     );
-    await this.storage.storeRequirements(requirements);
+    await this.storage.storeRequirements(requirements, conversationIdMap, messageIdMap);
 
     const validations = this.requirementsExtractor.extractValidations(
       parseResult.tool_uses,
       parseResult.tool_results,
       parseResult.messages
     );
-    await this.storage.storeValidations(validations);
+    await this.storage.storeValidations(validations, conversationIdMap);
 
     // Git integration
     if (options.enableGitIntegration !== false) {
@@ -226,7 +233,8 @@ export class ConversationMemory {
           parseResult.file_edits,
           decisions
         );
-        await this.storage.storeGitCommits(commits);
+        const projectId = this.storage.getProjectId(canonicalPath);
+        await this.storage.storeGitCommits(commits, projectId, conversationIdMap, messageIdMap);
         console.error(`✓ Linked ${commits.length} git commits`);
       } catch (error) {
         console.error("⚠️ Git integration failed:", error);
@@ -239,9 +247,57 @@ export class ConversationMemory {
     console.error("\n=== Indexing for Semantic Search ===");
     let embeddingError: string | undefined;
     try {
-      await this.semanticSearch.indexMessages(parseResult.messages);
-      await this.semanticSearch.indexDecisions(decisions);
-      await this.semanticSearch.indexMistakes(mistakes);
+      const messagesForEmbedding = parseResult.messages
+        .map((msg) => {
+          const internalId = messageIdMap.get(msg.id);
+          if (!internalId || !msg.content) {
+            return null;
+          }
+          return { id: internalId, content: msg.content };
+        })
+        .filter((msg): msg is { id: number; content: string } => Boolean(msg));
+
+      const decisionsForEmbedding: Array<{
+        id: number;
+        decision_text: string;
+        rationale?: string;
+        context?: string | null;
+      }> = [];
+      for (const decision of decisions) {
+        const internalId = decisionIdMap.get(decision.id);
+        if (!internalId) {
+          continue;
+        }
+        decisionsForEmbedding.push({
+          id: internalId,
+          decision_text: decision.decision_text,
+          rationale: decision.rationale,
+          context: decision.context ?? null,
+        });
+      }
+
+      const mistakesForEmbedding: Array<{
+        id: number;
+        what_went_wrong: string;
+        correction?: string | null;
+        mistake_type: string;
+      }> = [];
+      for (const mistake of mistakes) {
+        const internalId = mistakeIdMap.get(mistake.id);
+        if (!internalId) {
+          continue;
+        }
+        mistakesForEmbedding.push({
+          id: internalId,
+          what_went_wrong: mistake.what_went_wrong,
+          correction: mistake.correction ?? null,
+          mistake_type: mistake.mistake_type,
+        });
+      }
+
+      await this.semanticSearch.indexMessages(messagesForEmbedding);
+      await this.semanticSearch.indexDecisions(decisionsForEmbedding);
+      await this.semanticSearch.indexMistakes(mistakesForEmbedding);
       // Also index any decisions/mistakes in DB that are missing embeddings
       // (catches items created before embeddings were available)
       await this.semanticSearch.indexMissingDecisionEmbeddings();

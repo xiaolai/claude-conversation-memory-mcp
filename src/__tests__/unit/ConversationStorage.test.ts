@@ -9,10 +9,11 @@ import type { Decision } from '../../parsers/DecisionExtractor.js';
 
 describe('ConversationStorage', () => {
   let storage: ConversationStorage;
+  let db: ReturnType<typeof getSQLiteManager>;
 
   beforeEach(() => {
     // Use in-memory database for tests
-    const db = getSQLiteManager({ dbPath: ':memory:' });
+    db = getSQLiteManager({ dbPath: ':memory:' });
     storage = new ConversationStorage(db);
   });
 
@@ -73,7 +74,31 @@ describe('ConversationStorage', () => {
     });
   });
 
+  it('should resolve project aliases when ensuring project ids', () => {
+    const database = db.getDatabase();
+    const now = Date.now();
+    const result = database
+      .prepare(
+        'INSERT INTO projects (canonical_path, display_path, created_at, updated_at) VALUES (?, ?, ?, ?)'
+      )
+      .run('/old/path', '/old/path', now, now);
+    const projectId = Number(result.lastInsertRowid);
+    database
+      .prepare('INSERT INTO project_aliases (alias_path, project_id, created_at) VALUES (?, ?, ?)')
+      .run('/new/path', projectId, now);
+
+    const resolvedId = storage.getProjectId('/new/path');
+    expect(resolvedId).toBe(projectId);
+
+    const count = database
+      .prepare('SELECT COUNT(*) as count FROM projects')
+      .get() as { count: number };
+    expect(count.count).toBe(1);
+  });
+
   describe('storeMessages', () => {
+    let conversationIdMap: Map<string, number>;
+
     beforeEach(async () => {
       // Create parent conversation first
       const conversation: Conversation = {
@@ -87,7 +112,7 @@ describe('ConversationStorage', () => {
         created_at: Date.now(),
         updated_at: Date.now(),
       };
-      await storage.storeConversations([conversation]);
+      conversationIdMap = await storage.storeConversations([conversation]);
     });
 
     it('should store messages successfully', async () => {
@@ -104,13 +129,44 @@ describe('ConversationStorage', () => {
         },
       ];
 
-      await storage.storeMessages(messages);
+      await storage.storeMessages(messages, { conversationIdMap });
       // Messages are stored, no exception means success
       expect(true).toBe(true);
     });
 
     it('should handle empty message arrays', async () => {
-      await expect(storage.storeMessages([])).resolves.not.toThrow();
+      await expect(storage.storeMessages([], { conversationIdMap })).resolves.not.toThrow();
+    });
+
+    it('should skip messages with missing conversations', async () => {
+      const messages: Message[] = [
+        {
+          id: 'msg-valid',
+          conversation_id: 'test-conv-1',
+          message_type: 'user',
+          role: 'user',
+          content: 'Valid',
+          timestamp: Date.now(),
+          is_sidechain: false,
+          metadata: {},
+        },
+        {
+          id: 'msg-invalid',
+          conversation_id: 'missing-conv',
+          message_type: 'assistant',
+          role: 'assistant',
+          content: 'Invalid',
+          timestamp: Date.now(),
+          is_sidechain: false,
+          metadata: {},
+        },
+      ];
+
+      await storage.storeMessages(messages, { conversationIdMap });
+      const count = db.getDatabase().prepare('SELECT COUNT(*) as count FROM messages').get() as {
+        count: number;
+      };
+      expect(count.count).toBe(1);
     });
   });
 
@@ -128,7 +184,7 @@ describe('ConversationStorage', () => {
         created_at: Date.now(),
         updated_at: Date.now(),
       };
-      await storage.storeConversations([conversation]);
+      const conversationIdMap = await storage.storeConversations([conversation]);
 
       // Create parent messages
       const messages: Message[] = [
@@ -153,7 +209,7 @@ describe('ConversationStorage', () => {
           metadata: {},
         },
       ];
-      await storage.storeMessages(messages);
+      const messageIdMap = await storage.storeMessages(messages, { conversationIdMap });
 
       // Setup test data
       const decisions: Decision[] = [
@@ -184,7 +240,10 @@ describe('ConversationStorage', () => {
         },
       ];
 
-      await storage.storeDecisions(decisions);
+      await storage.storeDecisions(decisions, {
+        conversationIdMap,
+        messageIdMap,
+      });
     });
 
     it('should find decisions for a specific file', () => {
@@ -245,8 +304,8 @@ describe('ConversationStorage', () => {
         },
       ];
 
-      await storage.storeConversations([conversation]);
-      await storage.storeMessages(messages);
+      const conversationIdMap = await storage.storeConversations([conversation]);
+      await storage.storeMessages(messages, { conversationIdMap });
 
       const stats = storage.getStats();
       expect(stats.conversations.count).toBe(1);

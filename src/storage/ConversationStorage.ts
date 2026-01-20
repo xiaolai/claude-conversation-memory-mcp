@@ -31,9 +31,10 @@ import type { Mistake } from "../parsers/MistakeExtractor.js";
 import type { GitCommit } from "../parsers/GitIntegrator.js";
 import type { Requirement, Validation } from "../parsers/RequirementsExtractor.js";
 import { sanitizeForLike } from "../utils/sanitization.js";
-import type { DecisionRow, GitCommitRow, ConversationRow } from "../types/ToolTypes.js";
+import type { GitCommitRow, ConversationRow } from "../types/ToolTypes.js";
 import { QueryCache, type QueryCacheConfig, type CacheStats } from "../cache/QueryCache.js";
 import { safeJsonParse } from "../utils/safeJson.js";
+import { getCanonicalProjectPath } from "../utils/worktree.js";
 
 /**
  * Data access layer for conversation memory storage.
@@ -43,6 +44,7 @@ import { safeJsonParse } from "../utils/safeJson.js";
  */
 export class ConversationStorage {
   private cache: QueryCache | null = null;
+  private projectIdCache = new Map<string, number>();
 
   /**
    * Create a new ConversationStorage instance.
@@ -119,6 +121,46 @@ export class ConversationStorage {
     return this.cache ? this.cache.getStats() : null;
   }
 
+  getProjectId(projectPath: string): number {
+    return this.ensureProjectId(projectPath);
+  }
+
+  private ensureProjectId(projectPath: string): number {
+    const canonicalPath = getCanonicalProjectPath(projectPath).canonicalPath;
+    const cached = this.projectIdCache.get(canonicalPath);
+    if (cached) {
+      return cached;
+    }
+
+    const existing = this.db
+      .prepare("SELECT id FROM projects WHERE canonical_path = ?")
+      .get(canonicalPath) as { id: number } | undefined;
+
+    if (existing) {
+      this.projectIdCache.set(canonicalPath, existing.id);
+      return existing.id;
+    }
+
+    const alias = this.db
+      .prepare("SELECT project_id FROM project_aliases WHERE alias_path = ?")
+      .get(canonicalPath) as { project_id: number } | undefined;
+    if (alias) {
+      this.projectIdCache.set(canonicalPath, alias.project_id);
+      return alias.project_id;
+    }
+
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        "INSERT INTO projects (canonical_path, display_path, created_at, updated_at) VALUES (?, ?, ?, ?)"
+      )
+      .run(canonicalPath, canonicalPath, now, now);
+
+    const id = Number(result.lastInsertRowid);
+    this.projectIdCache.set(canonicalPath, id);
+    return id;
+  }
+
   // ==================== Conversations ====================
 
   /**
@@ -148,15 +190,14 @@ export class ConversationStorage {
    * ]);
    * ```
    */
-  async storeConversations(conversations: Conversation[]): Promise<void> {
+  async storeConversations(conversations: Conversation[]): Promise<Map<string, number>> {
     const stmt = this.db.prepare(`
       INSERT INTO conversations
-      (id, project_path, source_type, first_message_at, last_message_at, message_count,
+      (project_id, project_path, source_type, external_id, first_message_at, last_message_at, message_count,
        git_branch, claude_version, metadata, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, source_type, external_id) DO UPDATE SET
         project_path = excluded.project_path,
-        source_type = excluded.source_type,
         first_message_at = excluded.first_message_at,
         last_message_at = excluded.last_message_at,
         message_count = excluded.message_count,
@@ -166,12 +207,22 @@ export class ConversationStorage {
         updated_at = excluded.updated_at
     `);
 
+    const selectStmt = this.db.prepare(
+      "SELECT id FROM conversations WHERE project_id = ? AND source_type = ? AND external_id = ?"
+    );
+
+    const conversationIdMap = new Map<string, number>();
+
     this.db.transaction(() => {
       for (const conv of conversations) {
+        const canonicalProjectPath = getCanonicalProjectPath(conv.project_path).canonicalPath;
+        const projectId = this.ensureProjectId(canonicalProjectPath);
+        const sourceType = conv.source_type || "claude-code";
         stmt.run(
+          projectId,
+          canonicalProjectPath,
+          sourceType,
           conv.id,
-          conv.project_path,
-          conv.source_type || 'claude-code',
           conv.first_message_at,
           conv.last_message_at,
           conv.message_count,
@@ -181,6 +232,9 @@ export class ConversationStorage {
           conv.created_at,
           conv.updated_at
         );
+
+        const row = selectStmt.get(projectId, sourceType, conv.id) as { id: number };
+        conversationIdMap.set(conv.id, row.id);
       }
     });
 
@@ -190,6 +244,7 @@ export class ConversationStorage {
     }
 
     console.error(`✓ Stored ${conversations.length} conversations`);
+    return conversationIdMap;
   }
 
   /**
@@ -206,8 +261,8 @@ export class ConversationStorage {
    * }
    * ```
    */
-  getConversation(id: string): Conversation | null {
-    const cacheKey = `conversation:${id}`;
+  getConversation(id: string, projectPath?: string): Conversation | null {
+    const cacheKey = `conversation:${id}:${projectPath ?? "any"}`;
 
     // Check cache first
     if (this.cache) {
@@ -217,9 +272,17 @@ export class ConversationStorage {
       }
     }
 
-    const row = this.db
-      .prepare("SELECT * FROM conversations WHERE id = ?")
-      .get(id) as ConversationRow | undefined;
+    let sql = "SELECT * FROM conversations WHERE external_id = ?";
+    const params: (string | number)[] = [id];
+
+    if (projectPath) {
+      sql += " AND project_path = ?";
+      params.push(projectPath);
+    }
+
+    sql += " ORDER BY last_message_at DESC LIMIT 1";
+
+    const row = this.db.prepare(sql).get(...params) as ConversationRow | undefined;
 
     if (!row) {
       // Cache null result to avoid repeated queries
@@ -228,8 +291,17 @@ export class ConversationStorage {
     }
 
     const result = {
-      ...row,
+      id: row.external_id,
+      project_path: row.project_path,
+      source_type: row.source_type as 'claude-code' | 'codex',
+      first_message_at: row.first_message_at,
+      last_message_at: row.last_message_at,
+      message_count: row.message_count,
+      git_branch: row.git_branch,
+      claude_version: row.claude_version,
       metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     };
 
     // Cache the result
@@ -265,15 +337,23 @@ export class ConversationStorage {
    * ]);
    * ```
    */
-  async storeMessages(messages: Message[], skipFtsRebuild = false): Promise<void> {
+  async storeMessages(
+    messages: Message[],
+    options: { skipFtsRebuild?: boolean; conversationIdMap: Map<string, number> }
+  ): Promise<Map<string, number>> {
+    if (messages.length === 0) {
+      return new Map();
+    }
+
+    const { skipFtsRebuild = false, conversationIdMap } = options;
+
     const stmt = this.db.prepare(`
       INSERT INTO messages
-      (id, conversation_id, parent_id, message_type, role, content,
+      (conversation_id, external_id, parent_external_id, message_type, role, content,
        timestamp, is_sidechain, agent_id, request_id, git_branch, cwd, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        conversation_id = excluded.conversation_id,
-        parent_id = excluded.parent_id,
+      ON CONFLICT(conversation_id, external_id) DO UPDATE SET
+        parent_external_id = excluded.parent_external_id,
         message_type = excluded.message_type,
         role = excluded.role,
         content = excluded.content,
@@ -286,44 +366,25 @@ export class ConversationStorage {
         metadata = excluded.metadata
     `);
 
-    // Build a set of message IDs for FK validation (from current batch)
-    const messageIds = new Set(messages.map(m => m.id));
+    const selectStmt = this.db.prepare(
+      "SELECT id FROM messages WHERE conversation_id = ? AND external_id = ?"
+    );
 
-    // Collect parent_ids that need DB lookup (not in current batch)
-    const parentIdsToCheck = new Set<string>();
-    for (const msg of messages) {
-      if (msg.parent_id && !messageIds.has(msg.parent_id)) {
-        parentIdsToCheck.add(msg.parent_id);
-      }
-    }
-
-    // Only query DB for specific parent_ids we need (O(k) where k = unique parent refs)
-    // Chunk to avoid SQLite's max variables limit (999 by default)
-    if (parentIdsToCheck.size > 0) {
-      const CHUNK_SIZE = 500; // Stay well under SQLite's limit
-      const parentIdsArray = Array.from(parentIdsToCheck);
-
-      for (let i = 0; i < parentIdsArray.length; i += CHUNK_SIZE) {
-        const chunk = parentIdsArray.slice(i, i + CHUNK_SIZE);
-        const placeholders = chunk.map(() => '?').join(',');
-        const existingIds = this.db
-          .prepare(`SELECT id FROM messages WHERE id IN (${placeholders})`)
-          .all(...chunk) as { id: string }[];
-        for (const row of existingIds) {
-          messageIds.add(row.id);
-        }
-      }
-    }
+    const messageIdMap = new Map<string, number>();
+    let skipped = 0;
 
     this.db.transaction(() => {
       for (const msg of messages) {
-        // Nullify parent_id if it references a non-existent message to avoid FK violation
-        const safeParentId = msg.parent_id && messageIds.has(msg.parent_id) ? msg.parent_id : null;
+        const convId = conversationIdMap.get(msg.conversation_id);
+        if (!convId) {
+          skipped += 1;
+          continue;
+        }
 
         stmt.run(
+          convId,
           msg.id,
-          msg.conversation_id,
-          safeParentId,
+          msg.parent_id ?? null,
           msg.message_type,
           msg.role || null,
           msg.content || null,
@@ -335,17 +396,33 @@ export class ConversationStorage {
           msg.cwd || null,
           JSON.stringify(msg.metadata)
         );
+
+        const row = selectStmt.get(convId, msg.id) as { id: number };
+        messageIdMap.set(msg.id, row.id);
       }
     });
 
-    // Rebuild FTS index for full-text search
-    // FTS5 with external content requires explicit rebuild after inserts
-    // Skip during batch operations for performance (call rebuildAllFts() at end)
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} message(s) with missing conversations`);
+    }
+
+    // Resolve parent_message_id after inserts
+    this.db.exec(`
+      UPDATE messages
+      SET parent_message_id = (
+        SELECT m2.id FROM messages m2
+        WHERE m2.conversation_id = messages.conversation_id
+          AND m2.external_id = messages.parent_external_id
+      )
+      WHERE parent_external_id IS NOT NULL AND parent_message_id IS NULL
+    `);
+
     if (!skipFtsRebuild) {
       this.rebuildMessagesFts();
     }
 
-    console.error(`✓ Stored ${messages.length} messages`);
+    console.error(`✓ Stored ${messages.length - skipped} messages`);
+    return messageIdMap;
   }
 
   /**
@@ -373,31 +450,57 @@ export class ConversationStorage {
    * @param toolUses - Array of tool use objects
    * @returns Promise that resolves when stored
    */
-  async storeToolUses(toolUses: ToolUse[]): Promise<void> {
+  async storeToolUses(
+    toolUses: ToolUse[],
+    messageIdMap: Map<string, number>
+  ): Promise<Map<string, number>> {
+    if (toolUses.length === 0) {
+      return new Map();
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO tool_uses
-      (id, message_id, tool_name, tool_input, timestamp)
+      (message_id, external_id, tool_name, tool_input, timestamp)
       VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        message_id = excluded.message_id,
+      ON CONFLICT(message_id, external_id) DO UPDATE SET
         tool_name = excluded.tool_name,
         tool_input = excluded.tool_input,
         timestamp = excluded.timestamp
     `);
 
+    const selectStmt = this.db.prepare(
+      "SELECT id FROM tool_uses WHERE message_id = ? AND external_id = ?"
+    );
+
+    const toolUseIdMap = new Map<string, number>();
+    let skipped = 0;
+
     this.db.transaction(() => {
       for (const tool of toolUses) {
+        const messageId = messageIdMap.get(tool.message_id);
+        if (!messageId) {
+          skipped += 1;
+          continue;
+        }
         stmt.run(
+          messageId,
           tool.id,
-          tool.message_id,
           tool.tool_name,
           JSON.stringify(tool.tool_input),
           tool.timestamp
         );
+
+        const row = selectStmt.get(messageId, tool.id) as { id: number };
+        toolUseIdMap.set(tool.id, row.id);
       }
     });
 
-    console.error(`✓ Stored ${toolUses.length} tool uses`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} tool use(s) with missing messages`);
+    }
+
+    console.error(`✓ Stored ${toolUses.length - skipped} tool uses`);
+    return toolUseIdMap;
   }
 
   // ==================== Tool Results ====================
@@ -410,13 +513,20 @@ export class ConversationStorage {
    * @param toolResults - Array of tool result objects
    * @returns Promise that resolves when stored
    */
-  async storeToolResults(toolResults: ToolResult[]): Promise<void> {
+  async storeToolResults(
+    toolResults: ToolResult[],
+    messageIdMap: Map<string, number>,
+    toolUseIdMap: Map<string, number>
+  ): Promise<void> {
+    if (toolResults.length === 0) {
+      return;
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO tool_results
-      (id, tool_use_id, message_id, content, is_error, stdout, stderr, is_image, timestamp)
+      (tool_use_id, message_id, external_id, content, is_error, stdout, stderr, is_image, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        tool_use_id = excluded.tool_use_id,
+      ON CONFLICT(tool_use_id, external_id) DO UPDATE SET
         message_id = excluded.message_id,
         content = excluded.content,
         is_error = excluded.is_error,
@@ -426,12 +536,20 @@ export class ConversationStorage {
         timestamp = excluded.timestamp
     `);
 
+    let skipped = 0;
     this.db.transaction(() => {
       for (const result of toolResults) {
+        const toolUseId = toolUseIdMap.get(result.tool_use_id);
+        const messageId = messageIdMap.get(result.message_id);
+        if (!toolUseId || !messageId) {
+          skipped += 1;
+          continue;
+        }
+
         stmt.run(
+          toolUseId,
+          messageId,
           result.id,
-          result.tool_use_id,
-          result.message_id,
           result.content || null,
           result.is_error ? 1 : 0,
           result.stdout || null,
@@ -442,7 +560,11 @@ export class ConversationStorage {
       }
     });
 
-    console.error(`✓ Stored ${toolResults.length} tool results`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} tool result(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${toolResults.length - skipped} tool results`);
   }
 
   // ==================== File Edits ====================
@@ -455,14 +577,21 @@ export class ConversationStorage {
    * @param fileEdits - Array of file edit objects
    * @returns Promise that resolves when stored
    */
-  async storeFileEdits(fileEdits: FileEdit[]): Promise<void> {
+  async storeFileEdits(
+    fileEdits: FileEdit[],
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<void> {
+    if (fileEdits.length === 0) {
+      return;
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO file_edits
-      (id, conversation_id, file_path, message_id, backup_version,
+      (external_id, conversation_id, file_path, message_id, backup_version,
        backup_time, snapshot_timestamp, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        conversation_id = excluded.conversation_id,
+      ON CONFLICT(conversation_id, external_id) DO UPDATE SET
         file_path = excluded.file_path,
         message_id = excluded.message_id,
         backup_version = excluded.backup_version,
@@ -471,19 +600,26 @@ export class ConversationStorage {
         metadata = excluded.metadata
     `);
 
+    let skipped = 0;
     this.db.transaction(() => {
       for (const edit of fileEdits) {
+        const conversationId = conversationIdMap.get(edit.conversation_id);
+        const messageId = messageIdMap.get(edit.message_id);
+        if (!conversationId || !messageId) {
+          skipped += 1;
+          continue;
+        }
+
         stmt.run(
           edit.id,
-          edit.conversation_id,
+          conversationId,
           edit.file_path,
-          edit.message_id,
+          messageId,
           edit.backup_version || null,
           edit.backup_time || null,
           edit.snapshot_timestamp,
           JSON.stringify(edit.metadata)
         );
-        // Invalidate all caches for this file
         if (this.cache) {
           this.cache.delete(`edits:${edit.file_path}`);
           this.cache.delete(`timeline:${edit.file_path}`);
@@ -491,7 +627,11 @@ export class ConversationStorage {
       }
     });
 
-    console.error(`✓ Stored ${fileEdits.length} file edits`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} file edit(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${fileEdits.length - skipped} file edits`);
   }
 
   /**
@@ -524,7 +664,20 @@ export class ConversationStorage {
 
     const rows = this.db
       .prepare(
-        "SELECT * FROM file_edits WHERE file_path = ? ORDER BY snapshot_timestamp DESC"
+        `SELECT
+           fe.external_id as id,
+           c.external_id as conversation_id,
+           fe.file_path,
+           m.external_id as message_id,
+           fe.backup_version,
+           fe.backup_time,
+           fe.snapshot_timestamp,
+           fe.metadata
+         FROM file_edits fe
+         JOIN conversations c ON fe.conversation_id = c.id
+         JOIN messages m ON fe.message_id = m.id
+         WHERE fe.file_path = ?
+         ORDER BY fe.snapshot_timestamp DESC`
       )
       .all(filePath) as FileEditRow[];
 
@@ -550,23 +703,35 @@ export class ConversationStorage {
    * @param blocks - Array of thinking block objects
    * @returns Promise that resolves when stored
    */
-  async storeThinkingBlocks(blocks: ThinkingBlock[]): Promise<void> {
+  async storeThinkingBlocks(
+    blocks: ThinkingBlock[],
+    messageIdMap: Map<string, number>
+  ): Promise<void> {
+    if (blocks.length === 0) {
+      return;
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO thinking_blocks
-      (id, message_id, thinking_content, signature, timestamp)
+      (external_id, message_id, thinking_content, signature, timestamp)
       VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        message_id = excluded.message_id,
+      ON CONFLICT(message_id, external_id) DO UPDATE SET
         thinking_content = excluded.thinking_content,
         signature = excluded.signature,
         timestamp = excluded.timestamp
     `);
 
+    let skipped = 0;
     this.db.transaction(() => {
       for (const block of blocks) {
+        const messageId = messageIdMap.get(block.message_id);
+        if (!messageId) {
+          skipped += 1;
+          continue;
+        }
         stmt.run(
           block.id,
-          block.message_id,
+          messageId,
           block.thinking_content,
           block.signature || null,
           block.timestamp
@@ -574,7 +739,11 @@ export class ConversationStorage {
       }
     });
 
-    console.error(`✓ Stored ${blocks.length} thinking blocks`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} thinking block(s) with missing messages`);
+    }
+
+    console.error(`✓ Stored ${blocks.length - skipped} thinking blocks`);
   }
 
   // ==================== Decisions ====================
@@ -588,15 +757,27 @@ export class ConversationStorage {
    * @param skipFtsRebuild - Skip FTS rebuild (for batch operations, call rebuildAllFts() at end)
    * @returns Promise that resolves when stored
    */
-  async storeDecisions(decisions: Decision[], skipFtsRebuild = false): Promise<void> {
+  async storeDecisions(
+    decisions: Decision[],
+    options: {
+      skipFtsRebuild?: boolean;
+      conversationIdMap: Map<string, number>;
+      messageIdMap: Map<string, number>;
+    }
+  ): Promise<Map<string, number>> {
+    if (decisions.length === 0) {
+      return new Map();
+    }
+
+    const { skipFtsRebuild = false, conversationIdMap, messageIdMap } = options;
+
     const stmt = this.db.prepare(`
       INSERT INTO decisions
-      (id, conversation_id, message_id, decision_text, rationale,
+      (external_id, conversation_id, message_id, decision_text, rationale,
        alternatives_considered, rejected_reasons, context, related_files,
        related_commits, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        conversation_id = excluded.conversation_id,
+      ON CONFLICT(conversation_id, external_id) DO UPDATE SET
         message_id = excluded.message_id,
         decision_text = excluded.decision_text,
         rationale = excluded.rationale,
@@ -608,22 +789,39 @@ export class ConversationStorage {
         timestamp = excluded.timestamp
     `);
 
+    const selectStmt = this.db.prepare(
+      "SELECT id FROM decisions WHERE conversation_id = ? AND external_id = ?"
+    );
+
+    const decisionIdMap = new Map<string, number>();
+    let skipped = 0;
+
     this.db.transaction(() => {
       for (const decision of decisions) {
+        const conversationId = conversationIdMap.get(decision.conversation_id);
+        const messageId = messageIdMap.get(decision.message_id);
+        if (!conversationId || !messageId) {
+          skipped += 1;
+          continue;
+        }
+
         stmt.run(
           decision.id,
-          decision.conversation_id,
-          decision.message_id,
+          conversationId,
+          messageId,
           decision.decision_text,
           decision.rationale || null,
-          JSON.stringify(decision.alternatives_considered),
-          JSON.stringify(decision.rejected_reasons),
+          JSON.stringify(decision.alternatives_considered || []),
+          JSON.stringify(decision.rejected_reasons || {}),
           decision.context || null,
-          JSON.stringify(decision.related_files),
-          JSON.stringify(decision.related_commits),
+          JSON.stringify(decision.related_files || []),
+          JSON.stringify(decision.related_commits || []),
           decision.timestamp
         );
-        // Invalidate caches for related files
+
+        const row = selectStmt.get(conversationId, decision.id) as { id: number };
+        decisionIdMap.set(decision.id, row.id);
+
         if (this.cache && decision.related_files) {
           for (const filePath of decision.related_files) {
             this.cache.delete(`decisions:${filePath}`);
@@ -633,14 +831,16 @@ export class ConversationStorage {
       }
     });
 
-    // Rebuild FTS index for full-text search
-    // FTS5 with external content requires explicit rebuild after inserts
-    // Skip during batch operations for performance (call rebuildAllFts() at end)
     if (!skipFtsRebuild) {
       this.rebuildDecisionsFts();
     }
 
-    console.error(`✓ Stored ${decisions.length} decisions`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} decision(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${decisions.length - skipped} decisions`);
+    return decisionIdMap;
   }
 
   /**
@@ -687,16 +887,58 @@ export class ConversationStorage {
 
     const sanitized = sanitizeForLike(filePath);
     const rows = this.db
-      .prepare("SELECT * FROM decisions WHERE related_files LIKE ? ESCAPE '\\' ORDER BY timestamp DESC")
-      .all(`%"${sanitized}"%`) as DecisionRow[];
+      .prepare(
+        `SELECT
+          d.external_id as decision_external_id,
+          d.decision_text,
+          d.rationale,
+          d.alternatives_considered,
+          d.rejected_reasons,
+          d.context,
+          d.related_files,
+          d.related_commits,
+          d.timestamp,
+          c.external_id as conv_external_id,
+          m.external_id as message_external_id
+        FROM decisions d
+        JOIN conversations c ON d.conversation_id = c.id
+        LEFT JOIN messages m ON d.message_id = m.id
+        WHERE d.related_files LIKE ? ESCAPE '\\'
+        ORDER BY d.timestamp DESC`
+      )
+      .all(`%"${sanitized}"%`) as Array<{
+      decision_external_id: string;
+      decision_text: string;
+      rationale?: string | null;
+      alternatives_considered: string;
+      rejected_reasons: string;
+      context?: string | null;
+      related_files: string;
+      related_commits: string;
+      timestamp: number;
+      conv_external_id: string;
+      message_external_id: string | null;
+    }>;
 
-    const result = rows.map((row) => ({
-      ...row,
-      alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
-      rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
-      related_files: safeJsonParse<string[]>(row.related_files, []),
-      related_commits: safeJsonParse<string[]>(row.related_commits, []),
-    }));
+    const result: Decision[] = [];
+    for (const row of rows) {
+      if (!row.message_external_id) {
+        continue;
+      }
+      result.push({
+        id: row.decision_external_id,
+        conversation_id: row.conv_external_id,
+        message_id: row.message_external_id,
+        decision_text: row.decision_text,
+        rationale: row.rationale || undefined,
+        alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+        rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+        context: row.context || undefined,
+        related_files: safeJsonParse<string[]>(row.related_files, []),
+        related_commits: safeJsonParse<string[]>(row.related_commits, []),
+        timestamp: row.timestamp,
+      });
+    }
 
     // Cache the result
     this.cache?.set(cacheKey, result);
@@ -713,13 +955,22 @@ export class ConversationStorage {
    * @param commits - Array of git commit objects
    * @returns Promise that resolves when stored
    */
-  async storeGitCommits(commits: GitCommit[]): Promise<void> {
+  async storeGitCommits(
+    commits: GitCommit[],
+    projectId: number,
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<void> {
+    if (commits.length === 0) {
+      return;
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO git_commits
-      (hash, message, author, timestamp, branch, files_changed,
+      (project_id, hash, message, author, timestamp, branch, files_changed,
        conversation_id, related_message_id, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(hash) DO UPDATE SET
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, hash) DO UPDATE SET
         message = excluded.message,
         author = excluded.author,
         timestamp = excluded.timestamp,
@@ -732,18 +983,25 @@ export class ConversationStorage {
 
     this.db.transaction(() => {
       for (const commit of commits) {
+        const conversationId = commit.conversation_id
+          ? conversationIdMap.get(commit.conversation_id) ?? null
+          : null;
+        const messageId = commit.related_message_id
+          ? messageIdMap.get(commit.related_message_id) ?? null
+          : null;
+
         stmt.run(
+          projectId,
           commit.hash,
           commit.message,
           commit.author || null,
           commit.timestamp,
           commit.branch || null,
           JSON.stringify(commit.files_changed),
-          commit.conversation_id || null,
-          commit.related_message_id || null,
+          conversationId,
+          messageId,
           JSON.stringify(commit.metadata)
         );
-        // Invalidate caches for affected files
         if (this.cache && commit.files_changed) {
           for (const filePath of commit.files_changed) {
             this.cache.delete(`commits:${filePath}`);
@@ -769,12 +1027,36 @@ export class ConversationStorage {
 
     const sanitized = sanitizeForLike(filePath);
     const rows = this.db
-      .prepare("SELECT * FROM git_commits WHERE files_changed LIKE ? ESCAPE '\\' ORDER BY timestamp DESC")
-      .all(`%"${sanitized}"%`) as GitCommitRow[];
+      .prepare(
+        `SELECT
+          gc.id,
+          gc.project_id,
+          gc.hash,
+          gc.message,
+          gc.author,
+          gc.timestamp,
+          gc.branch,
+          gc.files_changed,
+          gc.metadata,
+          c.external_id as conversation_external_id,
+          m.external_id as message_external_id
+        FROM git_commits gc
+        LEFT JOIN conversations c ON gc.conversation_id = c.id
+        LEFT JOIN messages m ON gc.related_message_id = m.id
+        WHERE gc.files_changed LIKE ? ESCAPE '\\'
+        ORDER BY gc.timestamp DESC`
+      )
+      .all(`%"${sanitized}"%`) as Array<GitCommitRow & { conversation_external_id?: string | null; message_external_id?: string | null }>;
 
     const result = rows.map((row) => ({
-      ...row,
+      hash: row.hash,
+      message: row.message,
+      author: row.author,
+      timestamp: row.timestamp,
+      branch: row.branch,
       files_changed: safeJsonParse<string[]>(row.files_changed, []),
+      conversation_id: row.conversation_external_id || undefined,
+      related_message_id: row.message_external_id || undefined,
       metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     }));
 
@@ -793,14 +1075,21 @@ export class ConversationStorage {
    * @param mistakes - Array of mistake objects
    * @returns Promise that resolves when stored
    */
-  async storeMistakes(mistakes: Mistake[]): Promise<void> {
+  async storeMistakes(
+    mistakes: Mistake[],
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<Map<string, number>> {
+    if (mistakes.length === 0) {
+      return new Map();
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO mistakes
-      (id, conversation_id, message_id, mistake_type, what_went_wrong,
+      (external_id, conversation_id, message_id, mistake_type, what_went_wrong,
        correction, user_correction_message, files_affected, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        conversation_id = excluded.conversation_id,
+      ON CONFLICT(conversation_id, external_id) DO UPDATE SET
         message_id = excluded.message_id,
         mistake_type = excluded.mistake_type,
         what_went_wrong = excluded.what_went_wrong,
@@ -810,12 +1099,25 @@ export class ConversationStorage {
         timestamp = excluded.timestamp
     `);
 
+    const selectStmt = this.db.prepare(
+      "SELECT id FROM mistakes WHERE conversation_id = ? AND external_id = ?"
+    );
+
+    const mistakeIdMap = new Map<string, number>();
+    let skipped = 0;
+
     this.db.transaction(() => {
       for (const mistake of mistakes) {
+        const conversationId = conversationIdMap.get(mistake.conversation_id);
+        const messageId = messageIdMap.get(mistake.message_id);
+        if (!conversationId || !messageId) {
+          skipped += 1;
+          continue;
+        }
         stmt.run(
           mistake.id,
-          mistake.conversation_id,
-          mistake.message_id,
+          conversationId,
+          messageId,
           mistake.mistake_type,
           mistake.what_went_wrong,
           mistake.correction || null,
@@ -823,10 +1125,18 @@ export class ConversationStorage {
           JSON.stringify(mistake.files_affected),
           mistake.timestamp
         );
+
+        const row = selectStmt.get(conversationId, mistake.id) as { id: number };
+        mistakeIdMap.set(mistake.id, row.id);
       }
     });
 
-    console.error(`✓ Stored ${mistakes.length} mistakes`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} mistake(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${mistakes.length - skipped} mistakes`);
+    return mistakeIdMap;
   }
 
   // ==================== Requirements ====================
@@ -839,38 +1149,56 @@ export class ConversationStorage {
    * @param requirements - Array of requirement objects
    * @returns Promise that resolves when stored
    */
-  async storeRequirements(requirements: Requirement[]): Promise<void> {
+  async storeRequirements(
+    requirements: Requirement[],
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<void> {
+    if (requirements.length === 0) {
+      return;
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO requirements
-      (id, type, description, rationale, affects_components,
+      (external_id, type, description, rationale, affects_components,
        conversation_id, message_id, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      ON CONFLICT(conversation_id, external_id) DO UPDATE SET
         type = excluded.type,
         description = excluded.description,
         rationale = excluded.rationale,
         affects_components = excluded.affects_components,
-        conversation_id = excluded.conversation_id,
         message_id = excluded.message_id,
         timestamp = excluded.timestamp
     `);
 
+    let skipped = 0;
     this.db.transaction(() => {
       for (const req of requirements) {
+        const conversationId = conversationIdMap.get(req.conversation_id);
+        const messageId = messageIdMap.get(req.message_id);
+        if (!conversationId || !messageId) {
+          skipped += 1;
+          continue;
+        }
         stmt.run(
           req.id,
           req.type,
           req.description,
           req.rationale || null,
           JSON.stringify(req.affects_components),
-          req.conversation_id,
-          req.message_id,
+          conversationId,
+          messageId,
           req.timestamp
         );
       }
     });
 
-    console.error(`✓ Stored ${requirements.length} requirements`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} requirement(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${requirements.length - skipped} requirements`);
   }
 
   // ==================== Validations ====================
@@ -883,14 +1211,20 @@ export class ConversationStorage {
    * @param validations - Array of validation objects
    * @returns Promise that resolves when stored
    */
-  async storeValidations(validations: Validation[]): Promise<void> {
+  async storeValidations(
+    validations: Validation[],
+    conversationIdMap: Map<string, number>
+  ): Promise<void> {
+    if (validations.length === 0) {
+      return;
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO validations
-      (id, conversation_id, what_was_tested, test_command, result,
+      (external_id, conversation_id, what_was_tested, test_command, result,
        performance_data, files_tested, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        conversation_id = excluded.conversation_id,
+      ON CONFLICT(conversation_id, external_id) DO UPDATE SET
         what_was_tested = excluded.what_was_tested,
         test_command = excluded.test_command,
         result = excluded.result,
@@ -899,11 +1233,17 @@ export class ConversationStorage {
         timestamp = excluded.timestamp
     `);
 
+    let skipped = 0;
     this.db.transaction(() => {
       for (const val of validations) {
+        const conversationId = conversationIdMap.get(val.conversation_id);
+        if (!conversationId) {
+          skipped += 1;
+          continue;
+        }
         stmt.run(
           val.id,
-          val.conversation_id,
+          conversationId,
           val.what_was_tested,
           val.test_command || null,
           val.result,
@@ -914,7 +1254,11 @@ export class ConversationStorage {
       }
     });
 
-    console.error(`✓ Stored ${validations.length} validations`);
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} validation(s) with missing conversations`);
+    }
+
+    console.error(`✓ Stored ${validations.length - skipped} validations`);
   }
 
   // ==================== Queries ====================
@@ -1022,6 +1366,73 @@ export class ConversationStorage {
       git_commits: this.db
         .prepare("SELECT COUNT(*) as count FROM git_commits")
         .get() as { count: number },
+    };
+
+    return stats;
+  }
+
+  getStatsForProject(
+    projectPath: string,
+    sourceType: "claude-code" | "codex"
+  ): {
+    conversations: { count: number };
+    messages: { count: number };
+    decisions: { count: number };
+    mistakes: { count: number };
+    git_commits: { count: number };
+  } {
+    const canonicalPath = getCanonicalProjectPath(projectPath).canonicalPath;
+    const projectRow = this.db
+      .prepare("SELECT id FROM projects WHERE canonical_path = ?")
+      .get(canonicalPath) as { id: number } | undefined;
+
+    if (!projectRow) {
+      return {
+        conversations: { count: 0 },
+        messages: { count: 0 },
+        decisions: { count: 0 },
+        mistakes: { count: 0 },
+        git_commits: { count: 0 },
+      };
+    }
+
+    const stats = {
+      conversations: this.db
+        .prepare("SELECT COUNT(*) as count FROM conversations WHERE project_path = ? AND source_type = ?")
+        .get(canonicalPath, sourceType) as { count: number },
+      messages: this.db
+        .prepare(
+          `
+          SELECT COUNT(*) as count
+          FROM messages m
+          JOIN conversations c ON m.conversation_id = c.id
+          WHERE c.project_path = ? AND c.source_type = ?
+          `
+        )
+        .get(canonicalPath, sourceType) as { count: number },
+      decisions: this.db
+        .prepare(
+          `
+          SELECT COUNT(*) as count
+          FROM decisions d
+          JOIN conversations c ON d.conversation_id = c.id
+          WHERE c.project_path = ? AND c.source_type = ?
+          `
+        )
+        .get(canonicalPath, sourceType) as { count: number },
+      mistakes: this.db
+        .prepare(
+          `
+          SELECT COUNT(*) as count
+          FROM mistakes m
+          JOIN conversations c ON m.conversation_id = c.id
+          WHERE c.project_path = ? AND c.source_type = ?
+          `
+        )
+        .get(canonicalPath, sourceType) as { count: number },
+      git_commits: this.db
+        .prepare("SELECT COUNT(*) as count FROM git_commits WHERE project_id = ?")
+        .get(projectRow.id) as { count: number },
     };
 
     return stats;

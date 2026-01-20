@@ -51,7 +51,10 @@ export class SemanticSearch {
    * @param messages - Messages to index
    * @param incremental - If true, skip messages that already have embeddings (default: true for fast re-indexing)
    */
-  async indexMessages(messages: Message[], incremental: boolean = true): Promise<void> {
+  async indexMessages(
+    messages: Array<{ id: number; content?: string }>,
+    incremental: boolean = true
+  ): Promise<void> {
     console.error(`Indexing ${messages.length} messages...`);
 
     const embedder = await getEmbeddingGenerator();
@@ -63,7 +66,7 @@ export class SemanticSearch {
 
     // Filter messages with content
     const messagesWithContent = messages.filter(
-      (m): m is Message & { content: string } => !!m.content && m.content.trim().length > 0
+      (m): m is { id: number; content: string } => !!m.content && m.content.trim().length > 0
     );
 
     // In incremental mode, skip messages that already have embeddings
@@ -109,7 +112,10 @@ export class SemanticSearch {
    * @param decisions - Decisions to index
    * @param incremental - If true, skip decisions that already have embeddings (default: true for fast re-indexing)
    */
-  async indexDecisions(decisions: Decision[], incremental: boolean = true): Promise<void> {
+  async indexDecisions(
+    decisions: Array<{ id: number; decision_text: string; rationale?: string; context?: string | null }>,
+    incremental: boolean = true
+  ): Promise<void> {
     console.error(`Indexing ${decisions.length} decisions...`);
 
     const embedder = await getEmbeddingGenerator();
@@ -173,7 +179,7 @@ export class SemanticSearch {
     const existingIds = this.vectorStore.getExistingDecisionEmbeddingIds();
 
     interface DecisionRow {
-      id: string;
+      id: number;
       decision_text: string;
       rationale: string | null;
       context: string | null;
@@ -218,7 +224,10 @@ export class SemanticSearch {
    * @param mistakes - Mistakes to index
    * @param incremental - If true, skip mistakes that already have embeddings (default: true)
    */
-  async indexMistakes(mistakes: Mistake[], incremental: boolean = true): Promise<void> {
+  async indexMistakes(
+    mistakes: Array<{ id: number; what_went_wrong: string; correction?: string | null; mistake_type: string }>,
+    incremental: boolean = true
+  ): Promise<void> {
     console.error(`Indexing ${mistakes.length} mistakes...`);
 
     const embedder = await getEmbeddingGenerator();
@@ -282,7 +291,7 @@ export class SemanticSearch {
     const existingIds = this.vectorStore.getExistingMistakeEmbeddingIds();
 
     interface MistakeRow {
-      id: string;
+      id: number;
       what_went_wrong: string;
       correction: string | null;
       mistake_type: string;
@@ -336,10 +345,10 @@ export class SemanticSearch {
       return this.fallbackMistakeSearch(query, limit);
     }
 
-    // Generate query embedding
-    const queryEmbedding = await embedder.embed(query);
-
     try {
+      // Generate query embedding
+      const queryEmbedding = await embedder.embed(query);
+      this.vectorStore.prepareVecTables(queryEmbedding.length);
       // Use vec_distance_cosine for efficient ANN search with JOINs
       // Note: Must include byteOffset/byteLength in case Float32Array is a view
       const queryBuffer = Buffer.from(queryEmbedding.buffer, queryEmbedding.byteOffset, queryEmbedding.byteLength);
@@ -349,7 +358,7 @@ export class SemanticSearch {
           `SELECT
             vec.id as vec_id,
             vec_distance_cosine(vec.embedding, ?) as distance,
-            m.id,
+            m.external_id as mistake_external_id,
             m.conversation_id,
             m.message_id,
             m.mistake_type,
@@ -359,7 +368,9 @@ export class SemanticSearch {
             m.files_affected,
             m.timestamp,
             c.id as conv_id,
+            c.external_id as conv_external_id,
             c.project_path,
+            c.source_type,
             c.first_message_at,
             c.last_message_at,
             c.message_count,
@@ -367,28 +378,32 @@ export class SemanticSearch {
             c.claude_version,
             c.metadata as conv_metadata,
             c.created_at as conv_created_at,
-            c.updated_at as conv_updated_at
+            c.updated_at as conv_updated_at,
+            msg.external_id as message_external_id
           FROM vec_mistake_embeddings vec
           JOIN mistake_embeddings me ON vec.id = me.id
           JOIN mistakes m ON me.mistake_id = m.id
           JOIN conversations c ON m.conversation_id = c.id
+          LEFT JOIN messages msg ON m.message_id = msg.id
           ORDER BY distance
           LIMIT ?`
         )
         .all(queryBuffer, limit) as Array<{
         vec_id: string;
         distance: number;
-        id: string;
-        conversation_id: string;
-        message_id: string;
+        mistake_external_id: string;
+        conversation_id: number;
+        message_id: number;
         mistake_type: string;
         what_went_wrong: string;
         correction: string | null;
         user_correction_message: string | null;
         files_affected: string;
         timestamp: number;
-        conv_id: string;
+        conv_id: number;
+        conv_external_id: string;
         project_path: string;
+        source_type: string;
         first_message_at: number;
         last_message_at: number;
         message_count: number;
@@ -397,43 +412,60 @@ export class SemanticSearch {
         conv_metadata: string;
         conv_created_at: number;
         conv_updated_at: number;
+        message_external_id: string | null;
       }>;
 
       // Fall back to FTS if vector search returned no results
       if (rows.length === 0) {
-        console.error("Vector search returned no mistake results - falling back to FTS");
+        if (process.env.NODE_ENV !== "test") {
+          console.error("Vector search returned no mistake results - falling back to FTS");
+        }
         return this.fallbackMistakeSearch(query, limit);
       }
 
-      return rows.map((row) => ({
-        mistake: {
-          id: row.id,
-          conversation_id: row.conversation_id,
-          message_id: row.message_id,
-          mistake_type: row.mistake_type as Mistake["mistake_type"],
-          what_went_wrong: row.what_went_wrong,
-          correction: row.correction || undefined,
-          user_correction_message: row.user_correction_message || undefined,
-          files_affected: safeJsonParse<string[]>(row.files_affected, []),
-          timestamp: row.timestamp,
-        },
-        conversation: {
-          id: row.conv_id,
-          project_path: row.project_path,
-          first_message_at: row.first_message_at,
-          last_message_at: row.last_message_at,
-          message_count: row.message_count,
-          git_branch: row.git_branch,
-          claude_version: row.claude_version,
-          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
-          created_at: row.conv_created_at,
-          updated_at: row.conv_updated_at,
-        },
-        similarity: 1 - row.distance, // Convert distance to similarity
-      }));
+      const results: MistakeSearchResult[] = [];
+      for (const row of rows) {
+        if (!row.message_external_id) {
+          continue;
+        }
+        results.push({
+          mistake: {
+            id: row.mistake_external_id,
+            conversation_id: row.conv_external_id,
+            message_id: row.message_external_id,
+            mistake_type: row.mistake_type as Mistake["mistake_type"],
+            what_went_wrong: row.what_went_wrong,
+            correction: row.correction || undefined,
+            user_correction_message: row.user_correction_message || undefined,
+            files_affected: safeJsonParse<string[]>(row.files_affected, []),
+            timestamp: row.timestamp,
+          },
+          conversation: {
+            id: row.conv_external_id,
+            project_path: row.project_path,
+            source_type: row.source_type as "claude-code" | "codex",
+            first_message_at: row.first_message_at,
+            last_message_at: row.last_message_at,
+            message_count: row.message_count,
+            git_branch: row.git_branch,
+            claude_version: row.claude_version,
+            metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+            created_at: row.conv_created_at,
+            updated_at: row.conv_updated_at,
+          },
+          similarity: 1 - row.distance, // Convert distance to similarity
+        });
+      }
+      return results;
     } catch (error) {
       // Fallback to text search if vec search fails
-      console.error("Vec mistake search failed, falling back to text search:", (error as Error).message);
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        process.env.NODE_ENV !== "test" &&
+        !message.includes("no such table: vec_mistake_embeddings")
+      ) {
+        console.error("Vec mistake search failed, falling back to text search:", message);
+      }
       return this.fallbackMistakeSearch(query, limit);
     }
   }
@@ -480,7 +512,7 @@ export class SemanticSearch {
           if (!this.applyFilter(message, filter)) {continue;}
         }
 
-        const conversation = this.getConversation(message.conversation_id);
+        const conversation = this.getConversation(message.conversation_internal_id);
         if (!conversation) {continue;}
 
         enrichedResults.push({
@@ -495,7 +527,9 @@ export class SemanticSearch {
 
       // Fall back to FTS if vector search returned no results
       if (enrichedResults.length === 0) {
-        console.error("Vector search returned no results - falling back to FTS");
+        if (process.env.NODE_ENV !== "test") {
+          console.error("Vector search returned no results - falling back to FTS");
+        }
         return this.fallbackFullTextSearch(query, limit, filter);
       }
 
@@ -521,10 +555,10 @@ export class SemanticSearch {
       return this.fallbackDecisionSearch(query, limit);
     }
 
-    // Generate query embedding
-    const queryEmbedding = await embedder.embed(query);
-
     try {
+      // Generate query embedding
+      const queryEmbedding = await embedder.embed(query);
+      this.vectorStore.prepareVecTables(queryEmbedding.length);
       // Use vec_distance_cosine for efficient ANN search with JOINs to avoid N+1 queries
       // Note: Must include byteOffset/byteLength in case Float32Array is a view
       const queryBuffer = Buffer.from(queryEmbedding.buffer, queryEmbedding.byteOffset, queryEmbedding.byteLength);
@@ -534,7 +568,7 @@ export class SemanticSearch {
           `SELECT
             vec.id as vec_id,
             vec_distance_cosine(vec.embedding, ?) as distance,
-            d.id,
+            d.external_id as decision_external_id,
             d.conversation_id,
             d.message_id,
             d.decision_text,
@@ -546,7 +580,9 @@ export class SemanticSearch {
             d.related_commits,
             d.timestamp,
             c.id as conv_id,
+            c.external_id as conv_external_id,
             c.project_path,
+            c.source_type,
             c.first_message_at,
             c.last_message_at,
             c.message_count,
@@ -554,20 +590,22 @@ export class SemanticSearch {
             c.claude_version,
             c.metadata as conv_metadata,
             c.created_at as conv_created_at,
-            c.updated_at as conv_updated_at
+            c.updated_at as conv_updated_at,
+            m.external_id as message_external_id
           FROM vec_decision_embeddings vec
           JOIN decision_embeddings de ON vec.id = de.id
           JOIN decisions d ON de.decision_id = d.id
           JOIN conversations c ON d.conversation_id = c.id
+          LEFT JOIN messages m ON d.message_id = m.id
           ORDER BY distance
           LIMIT ?`
         )
         .all(queryBuffer, limit) as Array<{
         vec_id: string;
         distance: number;
-        id: string;
-        conversation_id: string;
-        message_id: string;
+        decision_external_id: string;
+        conversation_id: number;
+        message_id: number;
         decision_text: string;
         rationale: string;
         alternatives_considered: string;
@@ -576,8 +614,10 @@ export class SemanticSearch {
         related_files: string;
         related_commits: string;
         timestamp: number;
-        conv_id: string;
+        conv_id: number;
+        conv_external_id: string;
         project_path: string;
+        source_type: string;
         first_message_at: number;
         last_message_at: number;
         message_count: number;
@@ -586,45 +626,62 @@ export class SemanticSearch {
         conv_metadata: string;
         conv_created_at: number;
         conv_updated_at: number;
+        message_external_id: string | null;
       }>;
 
       // Fall back to FTS if vector search returned no results
       if (rows.length === 0) {
-        console.error("Vector search returned no decision results - falling back to FTS");
+        if (process.env.NODE_ENV !== "test") {
+          console.error("Vector search returned no decision results - falling back to FTS");
+        }
         return this.fallbackDecisionSearch(query, limit);
       }
 
-      return rows.map((row) => ({
-        decision: {
-          id: row.id,
-          conversation_id: row.conversation_id,
-          message_id: row.message_id,
-          decision_text: row.decision_text,
-          rationale: row.rationale,
-          alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
-          rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
-          context: row.context,
-          related_files: safeJsonParse<string[]>(row.related_files, []),
-          related_commits: safeJsonParse<string[]>(row.related_commits, []),
-          timestamp: row.timestamp,
-        },
-        conversation: {
-          id: row.conv_id,
-          project_path: row.project_path,
-          first_message_at: row.first_message_at,
-          last_message_at: row.last_message_at,
-          message_count: row.message_count,
-          git_branch: row.git_branch,
-          claude_version: row.claude_version,
-          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
-          created_at: row.conv_created_at,
-          updated_at: row.conv_updated_at,
-        },
-        similarity: 1 - row.distance, // Convert distance to similarity
-      }));
+      const results: DecisionSearchResult[] = [];
+      for (const row of rows) {
+        if (!row.message_external_id) {
+          continue;
+        }
+        results.push({
+          decision: {
+            id: row.decision_external_id,
+            conversation_id: row.conv_external_id,
+            message_id: row.message_external_id,
+            decision_text: row.decision_text,
+            rationale: row.rationale,
+            alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+            rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+            context: row.context,
+            related_files: safeJsonParse<string[]>(row.related_files, []),
+            related_commits: safeJsonParse<string[]>(row.related_commits, []),
+            timestamp: row.timestamp,
+          },
+          conversation: {
+            id: row.conv_external_id,
+            project_path: row.project_path,
+            source_type: row.source_type as "claude-code" | "codex",
+            first_message_at: row.first_message_at,
+            last_message_at: row.last_message_at,
+            message_count: row.message_count,
+            git_branch: row.git_branch,
+            claude_version: row.claude_version,
+            metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+            created_at: row.conv_created_at,
+            updated_at: row.conv_updated_at,
+          },
+          similarity: 1 - row.distance, // Convert distance to similarity
+        });
+      }
+      return results;
     } catch (error) {
       // Fallback to text search if vec search fails (e.g., table doesn't exist)
-      console.error("Vec decision search failed, falling back to text search:", (error as Error).message);
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        process.env.NODE_ENV !== "test" &&
+        !message.includes("no such table: vec_decision_embeddings")
+      ) {
+        console.error("Vec decision search failed, falling back to text search:", message);
+      }
       return this.fallbackDecisionSearch(query, limit);
     }
   }
@@ -665,14 +722,28 @@ export class SemanticSearch {
     // Sanitize the query for FTS5 syntax
     const ftsQuery = this.sanitizeFtsQuery(query);
 
-    interface JoinedRow extends MessageRow {
-      conv_id: string;
+    interface JoinedRow {
+      internal_message_id: number;
+      message_external_id: string;
+      parent_external_id?: string | null;
+      message_type: string;
+      role?: string;
+      content?: string;
+      timestamp: number;
+      is_sidechain: number;
+      agent_id?: string;
+      request_id?: string;
+      git_branch?: string;
+      cwd?: string;
+      metadata: string;
+      conv_internal_id: number;
+      conv_external_id: string;
       project_path: string;
       first_message_at: number;
       last_message_at: number;
       conv_message_count: number;
-      git_branch: string;
-      claude_version: string;
+      conv_git_branch?: string;
+      claude_version?: string;
       conv_metadata: string;
       conv_created_at: number;
       conv_updated_at: number;
@@ -680,12 +751,12 @@ export class SemanticSearch {
 
     const mapRowToResult = (row: JoinedRow): SearchResult => {
       const conversation = {
-        id: row.conv_id,
+        id: row.conv_external_id,
         project_path: row.project_path,
         first_message_at: row.first_message_at,
         last_message_at: row.last_message_at,
         message_count: row.conv_message_count,
-        git_branch: row.git_branch,
+        git_branch: row.conv_git_branch,
         claude_version: row.claude_version,
         metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
         created_at: row.conv_created_at,
@@ -694,9 +765,19 @@ export class SemanticSearch {
 
       return {
         message: {
-          ...row,
-          metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
+          id: row.message_external_id,
+          conversation_id: row.conv_external_id,
+          parent_id: row.parent_external_id ?? undefined,
+          message_type: row.message_type,
+          role: row.role,
+          content: row.content,
+          timestamp: row.timestamp,
           is_sidechain: Boolean(row.is_sidechain),
+          agent_id: row.agent_id,
+          request_id: row.request_id,
+          git_branch: row.git_branch,
+          cwd: row.cwd,
+          metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
         } as Message,
         conversation,
         similarity: 0.5, // Default similarity for FTS/LIKE
@@ -707,13 +788,27 @@ export class SemanticSearch {
     // Try FTS first, fall back to LIKE if FTS fails
     try {
       let sql = `
-        SELECT m.*,
-          c.id as conv_id,
+        SELECT
+          m.id as internal_message_id,
+          m.external_id as message_external_id,
+          m.parent_external_id,
+          m.message_type,
+          m.role,
+          m.content,
+          m.timestamp,
+          m.is_sidechain,
+          m.agent_id,
+          m.request_id,
+          m.git_branch,
+          m.cwd,
+          m.metadata,
+          c.id as conv_internal_id,
+          c.external_id as conv_external_id,
           c.project_path,
           c.first_message_at,
           c.last_message_at,
           c.message_count as conv_message_count,
-          c.git_branch,
+          c.git_branch as conv_git_branch,
           c.claude_version,
           c.metadata as conv_metadata,
           c.created_at as conv_created_at,
@@ -740,7 +835,7 @@ export class SemanticSearch {
         }
 
         if (filter.conversation_id) {
-          sql += " AND m.conversation_id = ?";
+          sql += " AND c.external_id = ?";
           params.push(filter.conversation_id);
         }
       }
@@ -755,13 +850,27 @@ export class SemanticSearch {
       console.error("Messages FTS not available, using LIKE search");
 
       let sql = `
-        SELECT m.*,
-          c.id as conv_id,
+        SELECT
+          m.id as internal_message_id,
+          m.external_id as message_external_id,
+          m.parent_external_id,
+          m.message_type,
+          m.role,
+          m.content,
+          m.timestamp,
+          m.is_sidechain,
+          m.agent_id,
+          m.request_id,
+          m.git_branch,
+          m.cwd,
+          m.metadata,
+          c.id as conv_internal_id,
+          c.external_id as conv_external_id,
           c.project_path,
           c.first_message_at,
           c.last_message_at,
           c.message_count as conv_message_count,
-          c.git_branch,
+          c.git_branch as conv_git_branch,
           c.claude_version,
           c.metadata as conv_metadata,
           c.created_at as conv_created_at,
@@ -787,7 +896,7 @@ export class SemanticSearch {
         }
 
         if (filter.conversation_id) {
-          sql += " AND m.conversation_id = ?";
+          sql += " AND c.external_id = ?";
           params.push(filter.conversation_id);
         }
       }
@@ -810,7 +919,9 @@ export class SemanticSearch {
     // Sanitize the query for FTS5 syntax
     const ftsQuery = this.sanitizeFtsQuery(query);
 
-    const mapRowToResult = (row: DecisionRow): DecisionSearchResult => {
+    const mapRowToResult = (
+      row: DecisionRow & { message_external_id: string }
+    ): DecisionSearchResult => {
       const conversation = this.getConversation(row.conversation_id);
       if (!conversation) {
         console.error(`Warning: Conversation ${row.conversation_id} not found for decision ${row.id}`);
@@ -819,11 +930,17 @@ export class SemanticSearch {
 
       return {
         decision: {
-          ...row,
+          id: row.external_id,
+          conversation_id: conversation.id,
+          message_id: row.message_external_id,
+          decision_text: row.decision_text,
+          rationale: row.rationale,
           alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
           rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+          context: row.context,
           related_files: safeJsonParse<string[]>(row.related_files, []),
           related_commits: safeJsonParse<string[]>(row.related_commits, []),
+          timestamp: row.timestamp,
         } as Decision,
         conversation,
         similarity: 0.5,
@@ -833,9 +950,9 @@ export class SemanticSearch {
     // Try FTS first, fall back to LIKE if FTS fails
     try {
       const sql = `
-        SELECT d.*, c.project_path, c.git_branch
+        SELECT d.*, m.external_id as message_external_id
         FROM decisions d
-        JOIN conversations c ON d.conversation_id = c.id
+        LEFT JOIN messages m ON d.message_id = m.id
         WHERE d.id IN (
           SELECT id FROM decisions_fts WHERE decisions_fts MATCH ?
         )
@@ -843,24 +960,32 @@ export class SemanticSearch {
         LIMIT ?
       `;
 
-      const rows = this.db.prepare(sql).all(ftsQuery, limit) as DecisionRow[];
-      return rows.map(mapRowToResult);
+      const rows = this.db.prepare(sql).all(ftsQuery, limit) as Array<DecisionRow & { message_external_id?: string | null }>;
+      const filteredRows = rows.filter(
+        (row): row is DecisionRow & { message_external_id: string } => Boolean(row.message_external_id)
+      );
+      return filteredRows.map(mapRowToResult);
     } catch (_e) {
       // FTS table may not exist or be corrupted, fall back to LIKE search
       console.error("Decisions FTS not available, using LIKE search");
 
       const sql = `
-        SELECT d.*, c.project_path, c.git_branch
+        SELECT d.*, m.external_id as message_external_id
         FROM decisions d
-        JOIN conversations c ON d.conversation_id = c.id
+        LEFT JOIN messages m ON d.message_id = m.id
         WHERE d.decision_text LIKE ? OR d.rationale LIKE ? OR d.context LIKE ?
         ORDER BY d.timestamp DESC
         LIMIT ?
       `;
 
       const likeQuery = `%${query}%`;
-      const rows = this.db.prepare(sql).all(likeQuery, likeQuery, likeQuery, limit) as DecisionRow[];
-      return rows.map(mapRowToResult);
+      const rows = this.db
+        .prepare(sql)
+        .all(likeQuery, likeQuery, likeQuery, limit) as Array<DecisionRow & { message_external_id?: string | null }>;
+      const filteredRows = rows.filter(
+        (row): row is DecisionRow & { message_external_id: string } => Boolean(row.message_external_id)
+      );
+      return filteredRows.map(mapRowToResult);
     }
   }
 
@@ -877,12 +1002,31 @@ export class SemanticSearch {
     // Try FTS first, fall back to LIKE if FTS table doesn't exist
     try {
       const sql = `
-        SELECT m.*, c.project_path, c.git_branch,
-          c.id as conv_id, c.first_message_at, c.last_message_at,
-          c.message_count, c.claude_version, c.metadata as conv_metadata,
-          c.created_at as conv_created_at, c.updated_at as conv_updated_at
+        SELECT
+          m.id,
+          m.external_id as mistake_external_id,
+          m.conversation_id,
+          m.message_id,
+          m.mistake_type,
+          m.what_went_wrong,
+          m.correction,
+          m.user_correction_message,
+          m.files_affected,
+          m.timestamp,
+          c.external_id as conv_external_id,
+          c.project_path,
+          c.git_branch,
+          c.first_message_at,
+          c.last_message_at,
+          c.message_count,
+          c.claude_version,
+          c.metadata as conv_metadata,
+          c.created_at as conv_created_at,
+          c.updated_at as conv_updated_at,
+          msg.external_id as message_external_id
         FROM mistakes m
         JOIN conversations c ON m.conversation_id = c.id
+        LEFT JOIN messages msg ON m.message_id = msg.id
         WHERE m.id IN (
           SELECT id FROM mistakes_fts WHERE mistakes_fts MATCH ?
         )
@@ -891,9 +1035,10 @@ export class SemanticSearch {
       `;
 
       interface MistakeRowWithConv {
-        id: string;
-        conversation_id: string;
-        message_id: string;
+        id: number;
+        mistake_external_id: string;
+        conversation_id: number;
+        message_id: number;
         mistake_type: string;
         what_went_wrong: string;
         correction: string | null;
@@ -902,7 +1047,7 @@ export class SemanticSearch {
         timestamp: number;
         project_path: string;
         git_branch: string;
-        conv_id: string;
+        conv_external_id: string;
         first_message_at: number;
         last_message_at: number;
         message_count: number;
@@ -910,56 +1055,84 @@ export class SemanticSearch {
         conv_metadata: string;
         conv_created_at: number;
         conv_updated_at: number;
+        message_external_id: string | null;
       }
 
       const rows = this.db.prepare(sql).all(ftsQuery, limit) as MistakeRowWithConv[];
 
-      return rows.map((row) => ({
-        mistake: {
-          id: row.id,
-          conversation_id: row.conversation_id,
-          message_id: row.message_id,
-          mistake_type: row.mistake_type as Mistake["mistake_type"],
-          what_went_wrong: row.what_went_wrong,
-          correction: row.correction || undefined,
-          user_correction_message: row.user_correction_message || undefined,
-          files_affected: safeJsonParse<string[]>(row.files_affected, []),
-          timestamp: row.timestamp,
-        },
-        conversation: {
-          id: row.conv_id,
-          project_path: row.project_path,
-          first_message_at: row.first_message_at,
-          last_message_at: row.last_message_at,
-          message_count: row.message_count,
-          git_branch: row.git_branch,
-          claude_version: row.claude_version,
-          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
-          created_at: row.conv_created_at,
-          updated_at: row.conv_updated_at,
-        },
-        similarity: 0.5,
-      }));
+      const results: MistakeSearchResult[] = [];
+      for (const row of rows) {
+        if (!row.message_external_id) {
+          continue;
+        }
+        results.push({
+          mistake: {
+            id: row.mistake_external_id,
+            conversation_id: row.conv_external_id,
+            message_id: row.message_external_id,
+            mistake_type: row.mistake_type as Mistake["mistake_type"],
+            what_went_wrong: row.what_went_wrong,
+            correction: row.correction || undefined,
+            user_correction_message: row.user_correction_message || undefined,
+            files_affected: safeJsonParse<string[]>(row.files_affected, []),
+            timestamp: row.timestamp,
+          },
+          conversation: {
+            id: row.conv_external_id,
+            project_path: row.project_path,
+            first_message_at: row.first_message_at,
+            last_message_at: row.last_message_at,
+            message_count: row.message_count,
+            git_branch: row.git_branch,
+            claude_version: row.claude_version,
+            metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+            created_at: row.conv_created_at,
+            updated_at: row.conv_updated_at,
+          },
+          similarity: 0.5,
+        });
+      }
+      return results;
     } catch (_e) {
       // FTS table may not exist, fall back to LIKE search
       console.error("Mistakes FTS not available, using LIKE search");
 
       const sql = `
-        SELECT m.*, c.project_path, c.git_branch,
-          c.id as conv_id, c.first_message_at, c.last_message_at,
-          c.message_count, c.claude_version, c.metadata as conv_metadata,
-          c.created_at as conv_created_at, c.updated_at as conv_updated_at
+        SELECT
+          m.id,
+          m.external_id as mistake_external_id,
+          m.conversation_id,
+          m.message_id,
+          m.mistake_type,
+          m.what_went_wrong,
+          m.correction,
+          m.user_correction_message,
+          m.files_affected,
+          m.timestamp,
+          c.external_id as conv_external_id,
+          c.project_path,
+          c.git_branch,
+          c.first_message_at,
+          c.last_message_at,
+          c.message_count,
+          c.claude_version,
+          c.metadata as conv_metadata,
+          c.created_at as conv_created_at,
+          c.updated_at as conv_updated_at,
+          msg.external_id as message_external_id
         FROM mistakes m
         JOIN conversations c ON m.conversation_id = c.id
+        LEFT JOIN messages msg ON m.message_id = msg.id
         WHERE m.what_went_wrong LIKE ? OR m.correction LIKE ?
         ORDER BY m.timestamp DESC
         LIMIT ?
       `;
 
       interface MistakeRowWithConv {
-        id: string;
-        conversation_id: string;
-        message_id: string;
+        id: number;
+        mistake_external_id: string;
+        conversation_id: number;
+        message_id: number;
         mistake_type: string;
         what_went_wrong: string;
         correction: string | null;
@@ -968,7 +1141,7 @@ export class SemanticSearch {
         timestamp: number;
         project_path: string;
         git_branch: string;
-        conv_id: string;
+        conv_external_id: string;
         first_message_at: number;
         last_message_at: number;
         message_count: number;
@@ -976,37 +1149,45 @@ export class SemanticSearch {
         conv_metadata: string;
         conv_created_at: number;
         conv_updated_at: number;
+        message_external_id: string | null;
       }
 
       const likeQuery = `%${query}%`;
       const rows = this.db.prepare(sql).all(likeQuery, likeQuery, limit) as MistakeRowWithConv[];
 
-      return rows.map((row) => ({
-        mistake: {
-          id: row.id,
-          conversation_id: row.conversation_id,
-          message_id: row.message_id,
-          mistake_type: row.mistake_type as Mistake["mistake_type"],
-          what_went_wrong: row.what_went_wrong,
-          correction: row.correction || undefined,
-          user_correction_message: row.user_correction_message || undefined,
-          files_affected: safeJsonParse<string[]>(row.files_affected, []),
-          timestamp: row.timestamp,
-        },
-        conversation: {
-          id: row.conv_id,
-          project_path: row.project_path,
-          first_message_at: row.first_message_at,
-          last_message_at: row.last_message_at,
-          message_count: row.message_count,
-          git_branch: row.git_branch,
-          claude_version: row.claude_version,
-          metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
-          created_at: row.conv_created_at,
-          updated_at: row.conv_updated_at,
-        },
-        similarity: 0.5,
-      }));
+      const results: MistakeSearchResult[] = [];
+      for (const row of rows) {
+        if (!row.message_external_id) {
+          continue;
+        }
+        results.push({
+          mistake: {
+            id: row.mistake_external_id,
+            conversation_id: row.conv_external_id,
+            message_id: row.message_external_id,
+            mistake_type: row.mistake_type as Mistake["mistake_type"],
+            what_went_wrong: row.what_went_wrong,
+            correction: row.correction || undefined,
+            user_correction_message: row.user_correction_message || undefined,
+            files_affected: safeJsonParse<string[]>(row.files_affected, []),
+            timestamp: row.timestamp,
+          },
+          conversation: {
+            id: row.conv_external_id,
+            project_path: row.project_path,
+            first_message_at: row.first_message_at,
+            last_message_at: row.last_message_at,
+            message_count: row.message_count,
+            git_branch: row.git_branch,
+            claude_version: row.claude_version,
+            metadata: safeJsonParse<Record<string, unknown>>(row.conv_metadata, {}),
+            created_at: row.conv_created_at,
+            updated_at: row.conv_updated_at,
+          },
+          similarity: 0.5,
+        });
+      }
+      return results;
     }
   }
 
@@ -1066,28 +1247,75 @@ export class SemanticSearch {
   /**
    * Get message by ID
    */
-  private getMessage(id: string): Message | null {
+  private getMessage(id: number): (Message & { conversation_internal_id: number }) | null {
     const row = this.db
-      .prepare("SELECT * FROM messages WHERE id = ?")
-      .get(id) as MessageRow | undefined;
+      .prepare(
+        `SELECT
+           m.id,
+           m.external_id,
+           m.conversation_id,
+           c.external_id as conversation_external_id,
+           m.parent_message_id,
+           m.parent_external_id,
+           m.message_type,
+           m.role,
+           m.content,
+           m.timestamp,
+           m.is_sidechain,
+           m.agent_id,
+           m.request_id,
+           m.git_branch,
+           m.cwd,
+           m.metadata
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.id = ?`
+      )
+      .get(id) as (MessageRow & { conversation_external_id: string }) | undefined;
 
     if (!row) {
       return null;
     }
 
     return {
-      ...row,
-      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
+      id: row.external_id,
+      conversation_id: row.conversation_external_id,
+      parent_id: row.parent_external_id ?? undefined,
+      message_type: row.message_type,
+      role: row.role,
+      content: row.content,
+      timestamp: row.timestamp,
       is_sidechain: Boolean(row.is_sidechain),
-    };
+      agent_id: row.agent_id,
+      request_id: row.request_id,
+      git_branch: row.git_branch,
+      cwd: row.cwd,
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
+      conversation_internal_id: row.conversation_id,
+    } as Message & { conversation_internal_id: number };
   }
 
   /**
    * Get conversation by ID
    */
-  private getConversation(id: string): Conversation | null {
+  private getConversation(id: number): Conversation | null {
     const row = this.db
-      .prepare("SELECT * FROM conversations WHERE id = ?")
+      .prepare(
+        `SELECT
+          id,
+          external_id,
+          project_path,
+          source_type,
+          first_message_at,
+          last_message_at,
+          message_count,
+          git_branch,
+          claude_version,
+          metadata,
+          created_at,
+          updated_at
+        FROM conversations WHERE id = ?`
+      )
       .get(id) as ConversationRow | undefined;
 
     if (!row) {
@@ -1095,8 +1323,17 @@ export class SemanticSearch {
     }
 
     return {
-      ...row,
+      id: row.external_id,
+      project_path: row.project_path,
+      source_type: row.source_type as 'claude-code' | 'codex',
+      first_message_at: row.first_message_at,
+      last_message_at: row.last_message_at,
+      message_count: row.message_count,
+      git_branch: row.git_branch,
+      claude_version: row.claude_version,
       metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     };
   }
 

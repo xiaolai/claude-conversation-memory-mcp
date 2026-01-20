@@ -1,124 +1,112 @@
 /**
- * CodeAnalyzer - Processes code graph data from CODE-GRAPH-RAG-MCP
+ * CodeAnalyzer - Lightweight codebase analyzer for documentation.
  *
- * Note: This class processes data that should be fetched from CODE-GRAPH-RAG-MCP
- * The actual MCP calls should be made by the tool handler and passed to this analyzer
+ * Scans the local filesystem to build a basic code index without
+ * relying on external MCP services.
  */
 
+import { readdirSync, statSync } from 'fs';
+import { join, relative } from 'path';
 import type {
   CodeData,
   CodeEntity,
   FileInfo,
   Hotspot,
   CodeClone,
-  RawEntity,
-  RawHotspot,
-  RawClone
 } from './types.js';
-
-export interface CodeGraphRagData {
-  entities?: RawEntity[];
-  hotspots?: RawHotspot[];
-  clones?: RawClone[];
-  graph?: Record<string, unknown>;
-}
 
 export class CodeAnalyzer {
   /**
-   * Process code graph data from CODE-GRAPH-RAG-MCP
+   * Scan a project directory and return lightweight code metadata.
    */
-  async analyze(codeGraphData: CodeGraphRagData): Promise<CodeData> {
-    console.error('🔍 Processing codebase structure...');
+  async analyze(projectPath: string, moduleFilter?: string): Promise<CodeData> {
+    console.error('🔍 Scanning codebase structure...');
 
-    const entities = this.parseEntities(codeGraphData.entities || []);
-    const files = this.groupEntitiesByFile(entities);
-    const hotspots = this.parseHotspots(codeGraphData.hotspots || []);
-    const clones = this.parseClones(codeGraphData.clones || []);
+    const files = this.collectFiles(projectPath, moduleFilter);
+    const fileInfos: FileInfo[] = files.map((file) => ({
+      path: file.relativePath,
+      size: file.size,
+      entities: [],
+    }));
 
-    console.error(`  Found ${entities.length} entities in ${files.length} files`);
+    const entities: CodeEntity[] = [];
+    const hotspots: Hotspot[] = [];
+    const clones: CodeClone[] = [];
+
+    console.error(`  Found ${fileInfos.length} files`);
 
     return {
       entities,
       relationships: [],
-      files,
+      files: fileInfos,
       hotspots,
-      clones
+      clones,
     };
   }
 
-  private parseEntities(rawEntities: RawEntity[]): CodeEntity[] {
-    if (!Array.isArray(rawEntities)) {
-      return [];
-    }
+  private collectFiles(projectPath: string, moduleFilter?: string): Array<{ relativePath: string; size: number }> {
+    const ignoreDirs = new Set([
+      'node_modules',
+      '.git',
+      '.turbo',
+      '.next',
+      'dist',
+      'build',
+      'coverage',
+      '.cache',
+      '.cccmemory',
+    ]);
 
-    return rawEntities.map(entity => ({
-      id: entity.id || entity.name || '',
-      name: entity.name || '',
-      type: this.normalizeEntityType(entity.type || ''),
-      filePath: entity.filePath || entity.file || '',
-      lineNumber: entity.lineNumber || entity.line,
-      complexity: entity.complexity,
-      description: entity.description
-    })).filter(e => e.id && e.name);
-  }
+    const includeExts = new Set([
+      '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+      '.py', '.go', '.rs', '.java', '.kt', '.swift',
+      '.c', '.cpp', '.h', '.hpp', '.cs', '.json', '.md'
+    ]);
 
-  private normalizeEntityType(type: string): CodeEntity['type'] {
-    const normalized = (type || '').toLowerCase();
-    if (normalized.includes('class')) {return 'class';}
-    if (normalized.includes('function') || normalized.includes('method')) {return 'function';}
-    if (normalized.includes('interface')) {return 'interface';}
-    if (normalized.includes('module')) {return 'module';}
-    if (normalized.includes('component')) {return 'component';}
-    return 'function';
-  }
+    const results: Array<{ relativePath: string; size: number }> = [];
 
-  private groupEntitiesByFile(entities: CodeEntity[]): FileInfo[] {
-    const fileMap = new Map<string, CodeEntity[]>();
-
-    for (const entity of entities) {
-      if (!entity.filePath) {
-        continue;
+    const walk = (dir: string) => {
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch (_error) {
+        return;
       }
 
-      if (!fileMap.has(entity.filePath)) {
-        fileMap.set(entity.filePath, []);
+      for (const entry of entries) {
+        const fullPath = join(dir, entry);
+        let stats;
+        try {
+          stats = statSync(fullPath);
+        } catch (_error) {
+          continue;
+        }
+
+        if (stats.isDirectory()) {
+          if (ignoreDirs.has(entry)) {
+            continue;
+          }
+          walk(fullPath);
+          continue;
+        }
+
+        const relativePath = relative(projectPath, fullPath).replace(/\\/g, '/');
+        if (moduleFilter && !relativePath.includes(moduleFilter)) {
+          continue;
+        }
+
+        const extIndex = entry.lastIndexOf('.');
+        const ext = extIndex >= 0 ? entry.slice(extIndex) : '';
+        if (!includeExts.has(ext)) {
+          continue;
+        }
+
+        results.push({ relativePath, size: stats.size });
       }
-      const fileEntities = fileMap.get(entity.filePath);
-      if (fileEntities) {
-        fileEntities.push(entity);
-      }
-    }
+    };
 
-    return Array.from(fileMap.entries()).map(([path, entities]) => ({
-      path,
-      size: 0, // Would need to read file to get actual size
-      entities
-    }));
-  }
-
-  private parseHotspots(rawHotspots: RawHotspot[]): Hotspot[] {
-    if (!Array.isArray(rawHotspots)) {
-      return [];
-    }
-
-    return rawHotspots.map(h => ({
-      filePath: h.filePath || h.file || h.path || '',
-      complexity: h.complexity || h.score || 0,
-      changeCount: h.changeCount || h.changes || 0,
-      metric: h.metric || 'complexity'
-    })).filter(h => h.filePath);
-  }
-
-  private parseClones(rawClones: RawClone[]): CodeClone[] {
-    if (!Array.isArray(rawClones)) {
-      return [];
-    }
-
-    return rawClones.map(c => ({
-      files: Array.isArray(c.files) ? c.files : [],
-      similarity: c.similarity || c.score || 0,
-      description: c.description || 'Code duplication detected'
-    })).filter(c => c.files.length >= 2);
+    walk(projectPath);
+    return results;
   }
 
   /**

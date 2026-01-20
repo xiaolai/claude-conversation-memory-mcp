@@ -2,7 +2,7 @@
  * DocumentationGenerator - Main orchestrator for comprehensive documentation
  */
 
-import { CodeAnalyzer, type CodeGraphRagData } from './CodeAnalyzer.js';
+import { CodeAnalyzer } from './CodeAnalyzer.js';
 import { ConversationAnalyzer } from './ConversationAnalyzer.js';
 import { CrossReferencer } from './CrossReferencer.js';
 import { MarkdownFormatter } from './MarkdownFormatter.js';
@@ -26,10 +26,9 @@ export class DocumentationGenerator {
    * Generate comprehensive documentation
    *
    * @param options - Documentation options
-   * @param codeGraphData - Data from CODE-GRAPH-RAG-MCP (must be fetched externally)
    * @returns Markdown documentation
    */
-  async generate(options: DocumentationOptions, codeGraphData: CodeGraphRagData): Promise<string> {
+  async generate(options: DocumentationOptions): Promise<string> {
     console.error('\n📚 Generating Comprehensive Documentation');
     console.error(`Project: ${options.projectPath}`);
     console.error(`Scope: ${options.scope}`);
@@ -42,7 +41,7 @@ export class DocumentationGenerator {
 
     try {
       // Step 1: Analyze code structure
-      const codeData = await this.codeAnalyzer.analyze(codeGraphData);
+      const codeData = await this.codeAnalyzer.analyze(options.projectPath, options.moduleFilter);
 
       // Step 2: Analyze conversation history
       const conversationData = await this.conversationAnalyzer.analyze(

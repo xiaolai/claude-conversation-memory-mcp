@@ -7,7 +7,7 @@ import type { SQLiteManager } from "../storage/SQLiteManager.js";
 import Database from "better-sqlite3";
 
 export interface VectorSearchResult {
-  id: string;
+  id: number;
   content: string;
   similarity: number;
   metadata?: Record<string, unknown>;
@@ -82,16 +82,16 @@ export class VectorStore {
     idColumn: string,
     vecTable: string,
     prefix: string
-  ): Set<string> {
-    const ids = new Set<string>();
+  ): Set<number> {
+    const ids = new Set<number>();
 
     // Query BLOB fallback table
     try {
       const rows = this.db
         .prepare(`SELECT ${idColumn} FROM ${blobTable}`)
-        .all() as Array<Record<string, string>>;
+        .all() as Array<Record<string, number>>;
       for (const row of rows) {
-        ids.add(row[idColumn]);
+        ids.add(Number(row[idColumn]));
       }
     } catch (_e) {
       // Table might not exist yet
@@ -106,7 +106,7 @@ export class VectorStore {
         for (const row of vecRows) {
           // Strip prefix to get actual entity ID
           if (row.id.startsWith(prefix)) {
-            ids.add(row.id.substring(prefix.length));
+            ids.add(Number(row.id.substring(prefix.length)));
           }
         }
       } catch (_e) {
@@ -120,7 +120,7 @@ export class VectorStore {
   /**
    * Get set of message IDs that already have embeddings.
    */
-  getExistingMessageEmbeddingIds(): Set<string> {
+  getExistingMessageEmbeddingIds(): Set<number> {
     return this.getExistingEmbeddingIds(
       "message_embeddings",
       "message_id",
@@ -132,7 +132,7 @@ export class VectorStore {
   /**
    * Get set of decision IDs that already have embeddings.
    */
-  getExistingDecisionEmbeddingIds(): Set<string> {
+  getExistingDecisionEmbeddingIds(): Set<number> {
     return this.getExistingEmbeddingIds(
       "decision_embeddings",
       "decision_id",
@@ -144,7 +144,7 @@ export class VectorStore {
   /**
    * Get set of mistake IDs that already have embeddings.
    */
-  getExistingMistakeEmbeddingIds(): Set<string> {
+  getExistingMistakeEmbeddingIds(): Set<number> {
     return this.getExistingEmbeddingIds(
       "mistake_embeddings",
       "mistake_id",
@@ -166,6 +166,13 @@ export class VectorStore {
   }
 
   /**
+   * Prepare vec tables for search when dimensions are known.
+   */
+  prepareVecTables(dimensions: number): void {
+    this.ensureVecTables(dimensions);
+  }
+
+  /**
    * Store an embedding for a message
    * @param messageId - The message ID
    * @param content - The message content
@@ -173,11 +180,23 @@ export class VectorStore {
    * @param modelName - The model used to generate the embedding (default: all-MiniLM-L6-v2)
    */
   async storeMessageEmbedding(
-    messageId: string,
+    messageId: number,
     content: string,
     embedding: Float32Array,
     modelName: string = "all-MiniLM-L6-v2"
   ): Promise<void> {
+    const foreignKeysEnabled = Boolean(
+      this.db.pragma("foreign_keys", { simple: true }) as number
+    );
+    if (foreignKeysEnabled) {
+      const messageExists = this.db
+        .prepare("SELECT 1 FROM messages WHERE id = ?")
+        .get(messageId);
+      if (!messageExists) {
+        return;
+      }
+    }
+
     const embedId = `msg_${messageId}`;
 
     // ALWAYS store content in BLOB table for JOINs and fallback
@@ -226,7 +245,7 @@ export class VectorStore {
    * Store embedding in BLOB table (fallback)
    */
   private storeInBlobTable(
-    messageId: string,
+    messageId: number,
     content: string,
     embedding: Float32Array,
     modelName: string
@@ -264,14 +283,27 @@ export class VectorStore {
    * @param entityType - For logging (e.g., "decision")
    */
   private storeEntityEmbedding(
-    entityId: string,
+    entityId: number,
     embedding: Float32Array,
     blobTable: string,
     idColumn: string,
     vecTable: string,
     prefix: string,
-    entityType: string
+    entityType: string,
+    entityTable: string
   ): void {
+    const foreignKeysEnabled = Boolean(
+      this.db.pragma("foreign_keys", { simple: true }) as number
+    );
+    if (foreignKeysEnabled) {
+      const entityExists = this.db
+        .prepare(`SELECT 1 FROM ${entityTable} WHERE id = ?`)
+        .get(entityId);
+      if (!entityExists) {
+        return;
+      }
+    }
+
     const embedId = `${prefix}${entityId}`;
 
     // Store in BLOB table
@@ -317,7 +349,7 @@ export class VectorStore {
    * Store an embedding for a decision
    */
   async storeDecisionEmbedding(
-    decisionId: string,
+    decisionId: number,
     embedding: Float32Array
   ): Promise<void> {
     this.storeEntityEmbedding(
@@ -327,7 +359,8 @@ export class VectorStore {
       "decision_id",
       "vec_decision_embeddings",
       "dec_",
-      "decision"
+      "decision",
+      "decisions"
     );
   }
 
@@ -335,7 +368,7 @@ export class VectorStore {
    * Store an embedding for a mistake
    */
   async storeMistakeEmbedding(
-    mistakeId: string,
+    mistakeId: number,
     embedding: Float32Array
   ): Promise<void> {
     this.storeEntityEmbedding(
@@ -345,7 +378,8 @@ export class VectorStore {
       "mistake_id",
       "vec_mistake_embeddings",
       "mst_",
-      "mistake"
+      "mistake",
+      "mistakes"
     );
   }
 
@@ -371,6 +405,7 @@ export class VectorStore {
     limit: number
   ): VectorSearchResult[] {
     try {
+      this.ensureVecTables(queryEmbedding.length);
       const queryBuffer = this.float32ArrayToBuffer(queryEmbedding);
 
       const results = this.db
@@ -391,12 +426,15 @@ export class VectorStore {
       }>;
 
       return results.map((r) => ({
-        id: r.id.replace("msg_", ""),
+        id: Number(r.id.replace("msg_", "")),
         content: r.content,
         similarity: 1 - r.distance, // Convert distance to similarity
       }));
     } catch (error) {
-      console.error("Error in vec search:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("no such table: vec_message_embeddings")) {
+        console.error("Error in vec search:", error);
+      }
       // Fallback to cosine
       return this.searchWithCosine(queryEmbedding, limit);
     }
@@ -413,7 +451,7 @@ export class VectorStore {
       .prepare("SELECT id, message_id, content, embedding FROM message_embeddings")
       .all() as Array<{
       id: string;
-      message_id: string;
+      message_id: number;
       content: string;
       embedding: Buffer;
     }>;
@@ -424,7 +462,7 @@ export class VectorStore {
         const similarity = this.cosineSimilarity(queryEmbedding, embedding);
 
         return {
-          id: row.message_id,
+          id: Number(row.message_id),
           content: row.content,
           similarity,
         };

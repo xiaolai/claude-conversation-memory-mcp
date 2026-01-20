@@ -154,6 +154,94 @@ describe("ConversationParser", () => {
       expect(result.tool_results[0].stdout).toBe("file1.txt\nfile2.txt");
     });
 
+    it("should skip tool calls without valid ids or stored messages", () => {
+      const sessionId = "test-session-tool-safety";
+      const sessionFile = join(testClaudePath, `${sessionId}.jsonl`);
+
+      const messages = [
+        // Valid tool use + result
+        {
+          type: "assistant",
+          uuid: "msg-001",
+          sessionId,
+          timestamp: "2025-01-17T10:00:01.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "tool-001", name: "bash", input: { command: "ls" } },
+            ],
+          },
+        },
+        {
+          type: "user",
+          uuid: "msg-002",
+          sessionId,
+          timestamp: "2025-01-17T10:00:02.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tool-001", content: "ok" }],
+          },
+        },
+        // Tool use missing id (should be skipped)
+        {
+          type: "assistant",
+          uuid: "msg-003",
+          sessionId,
+          timestamp: "2025-01-17T10:00:03.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", name: "bash", input: { command: "pwd" } }],
+          },
+        },
+        // Tool result missing tool_use_id (should be skipped)
+        {
+          type: "user",
+          uuid: "msg-004",
+          sessionId,
+          timestamp: "2025-01-17T10:00:04.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", content: "no id" }],
+          },
+        },
+        // Tool use on message without sessionId (message not stored)
+        {
+          type: "assistant",
+          uuid: "msg-005",
+          timestamp: "2025-01-17T10:00:05.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "tool-002", name: "bash", input: { command: "whoami" } },
+            ],
+          },
+        },
+        // Tool result referencing tool-002 (should be skipped because tool-002 skipped)
+        {
+          type: "user",
+          uuid: "msg-006",
+          sessionId,
+          timestamp: "2025-01-17T10:00:06.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tool-002", content: "user" }],
+          },
+        },
+      ];
+
+      writeFileSync(
+        sessionFile,
+        messages.map((m) => JSON.stringify(m)).join("\n")
+      );
+
+      const result = parser.parseFromFolder(testClaudePath);
+
+      expect(result.tool_uses).toHaveLength(1);
+      expect(result.tool_uses[0].id).toBe("tool-001");
+      expect(result.tool_results).toHaveLength(1);
+      expect(result.tool_results[0].tool_use_id).toBe("tool-001");
+    });
+
     it("should extract thinking blocks", () => {
       const sessionId = "test-session-thinking";
       const sessionFile = join(testClaudePath, `${sessionId}.jsonl`);

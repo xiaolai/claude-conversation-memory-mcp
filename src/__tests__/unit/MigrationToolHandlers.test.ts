@@ -5,12 +5,57 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { tmpdir } from "os";
-import { join } from "path";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
-import Database from "better-sqlite3";
+import { join, basename, dirname } from "path";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from "fs";
 import { ToolHandlers } from "../../tools/ToolHandlers.js";
 import { ConversationMemory } from "../../ConversationMemory.js";
 import { getSQLiteManager, resetSQLiteManager } from "../../storage/SQLiteManager.js";
+
+const insertProject = (db: ReturnType<ReturnType<typeof getSQLiteManager>["getDatabase"]>, projectPath: string) => {
+  const now = Date.now();
+  const result = db
+    .prepare(
+      "INSERT INTO projects (canonical_path, display_path, created_at, updated_at) VALUES (?, ?, ?, ?)"
+    )
+    .run(projectPath, projectPath, now, now);
+  return Number(result.lastInsertRowid);
+};
+
+const insertConversation = (
+  db: ReturnType<ReturnType<typeof getSQLiteManager>["getDatabase"]>,
+  projectId: number,
+  projectPath: string,
+  externalId: string,
+  lastMessageAt: number,
+  messageCount = 1
+) => {
+  const now = Date.now();
+  const result = db
+    .prepare(
+      `
+      INSERT INTO conversations
+      (project_id, project_path, source_type, external_id, first_message_at, last_message_at, message_count, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+    .run(projectId, projectPath, "claude-code", externalId, lastMessageAt, lastMessageAt, messageCount, now, now);
+  return Number(result.lastInsertRowid);
+};
+
+const insertMessage = (
+  db: ReturnType<ReturnType<typeof getSQLiteManager>["getDatabase"]>,
+  conversationId: number,
+  externalId: string,
+  timestamp: number
+) => {
+  db.prepare(
+    `
+    INSERT INTO messages
+    (conversation_id, external_id, message_type, role, content, timestamp, metadata)
+    VALUES (?, ?, 'user', 'user', 'content', ?, '{}')
+    `
+  ).run(conversationId, externalId, timestamp);
+};
 
 describe("Migration Tool Handlers", () => {
   let testDir: string;
@@ -45,19 +90,13 @@ describe("Migration Tool Handlers", () => {
       // Setup: Create old folder with database
       const oldFolder = join(projectsDir, "-Users-test-old-project");
       mkdirSync(oldFolder, { recursive: true });
-
-      const dbPath = join(oldFolder, ".cccmemory.db");
-      const db = new Database(dbPath);
-      db.exec(`
-        CREATE TABLE conversations (id TEXT, project_path TEXT, first_message_at INTEGER, last_message_at INTEGER);
-        CREATE TABLE messages (id TEXT, conversation_id TEXT);
-        INSERT INTO conversations VALUES ('c1', '/Users/test/old-project', 1000, 2000);
-        INSERT INTO conversations VALUES ('c2', '/Users/test/old-project', 3000, 4000);
-        INSERT INTO messages VALUES ('m1', 'c1');
-        INSERT INTO messages VALUES ('m2', 'c1');
-        INSERT INTO messages VALUES ('m3', 'c2');
-      `);
-      db.close();
+      const db = getSQLiteManager().getDatabase();
+      const projectId = insertProject(db, "/Users/test/old-project");
+      const conv1 = insertConversation(db, projectId, "/Users/test/old-project", "c1", 2000);
+      const conv2 = insertConversation(db, projectId, "/Users/test/old-project", "c2", 4000);
+      insertMessage(db, conv1, "m1", 1000);
+      insertMessage(db, conv1, "m2", 1001);
+      insertMessage(db, conv2, "m3", 1002);
 
       writeFileSync(join(oldFolder, "session1.jsonl"), '{}');
       writeFileSync(join(oldFolder, "session2.jsonl"), '{}');
@@ -95,16 +134,16 @@ describe("Migration Tool Handlers", () => {
       const folder2 = join(projectsDir, "-Users-test-similar-project");
       const folder3 = join(projectsDir, "-Users-different-other");
 
-      [folder1, folder2, folder3].forEach((folder, i) => {
+      [folder1, folder2, folder3].forEach((folder) => {
         mkdirSync(folder, { recursive: true });
-        const db = new Database(join(folder, ".cccmemory.db"));
-        db.exec(`
-          CREATE TABLE conversations (id TEXT, project_path TEXT);
-          INSERT INTO conversations VALUES ('c${i}', '/Users/test/${i === 0 ? 'exact' : i === 1 ? 'similar' : 'different'}-project');
-        `);
-        db.close();
         writeFileSync(join(folder, "session.jsonl"), '{}');
       });
+
+      const db = getSQLiteManager().getDatabase();
+      const projectId1 = insertProject(db, "/Users/test/exact-project");
+      insertConversation(db, projectId1, "/Users/test/exact-project", "c1", 1000);
+      const projectId2 = insertProject(db, "/Users/test/similar-project");
+      insertConversation(db, projectId2, "/Users/test/similar-project", "c2", 1000);
 
       // Test: Discover with path similar to folder1
       const result = await handlers.discoverOldConversations({
@@ -121,23 +160,13 @@ describe("Migration Tool Handlers", () => {
       // Setup: Create folder with multiple conversations
       const oldFolder = join(projectsDir, "-Users-test-project");
       mkdirSync(oldFolder, { recursive: true });
-
-      const db = new Database(join(oldFolder, ".cccmemory.db"));
-      db.exec(`
-        CREATE TABLE conversations (
-          id TEXT,
-          project_path TEXT,
-          first_message_at INTEGER,
-          last_message_at INTEGER
-        );
-        CREATE TABLE messages (id TEXT, conversation_id TEXT);
-        INSERT INTO conversations VALUES ('c1', '/Users/test/project', 1000, 5000);
-        INSERT INTO conversations VALUES ('c2', '/Users/test/project', 2000, 6000);
-        INSERT INTO messages VALUES ('m1', 'c1');
-        INSERT INTO messages VALUES ('m2', 'c1');
-        INSERT INTO messages VALUES ('m3', 'c2');
-      `);
-      db.close();
+      const db = getSQLiteManager().getDatabase();
+      const projectId = insertProject(db, "/Users/test/project");
+      const conv1 = insertConversation(db, projectId, "/Users/test/project", "c1", 5000);
+      const conv2 = insertConversation(db, projectId, "/Users/test/project", "c2", 6000);
+      insertMessage(db, conv1, "m1", 1000);
+      insertMessage(db, conv1, "m2", 1001);
+      insertMessage(db, conv2, "m3", 1002);
 
       writeFileSync(join(oldFolder, "s1.jsonl"), '{}');
       writeFileSync(join(oldFolder, "s2.jsonl"), '{}');
@@ -164,14 +193,10 @@ describe("Migration Tool Handlers", () => {
 
       writeFileSync(join(sourceFolder, "session1.jsonl"), 'content1');
       writeFileSync(join(sourceFolder, "session2.jsonl"), 'content2');
-
-      const db = new Database(join(sourceFolder, ".cccmemory.db"));
-      db.exec(`
-        CREATE TABLE conversations (id TEXT, project_path TEXT);
-        INSERT INTO conversations VALUES ('c1', '/Users/test/old');
-        INSERT INTO conversations VALUES ('c2', '/Users/test/old');
-      `);
-      db.close();
+      const db = getSQLiteManager().getDatabase();
+      const projectId = insertProject(db, "/Users/test/old");
+      insertConversation(db, projectId, "/Users/test/old", "c1", 1000);
+      insertConversation(db, projectId, "/Users/test/old", "c2", 2000);
 
       // Test: Execute migration
       const result = await handlers.migrateProject({
@@ -195,16 +220,13 @@ describe("Migration Tool Handlers", () => {
       expect(existsSync(join(targetFolder, "session2.jsonl"))).toBe(true);
 
       // Verify: Database updated
-      const targetDb = new Database(join(targetFolder, ".cccmemory.db"));
-      const rows = targetDb.prepare("SELECT * FROM conversations").all() as Array<{
-        id: string;
-        project_path: string;
-      }>;
+      const rows = db
+        .prepare("SELECT project_path FROM conversations WHERE project_id = ? ORDER BY external_id")
+        .all(projectId) as Array<{ project_path: string }>;
       expect(rows).toHaveLength(2);
       rows.forEach(row => {
         expect(row.project_path).toBe("/Users/test/new");
       });
-      targetDb.close();
     });
 
     it("should perform dry run without making changes", async () => {
@@ -213,14 +235,6 @@ describe("Migration Tool Handlers", () => {
       mkdirSync(sourceFolder, { recursive: true });
 
       writeFileSync(join(sourceFolder, "session.jsonl"), 'content');
-
-      const db = new Database(join(sourceFolder, ".cccmemory.db"));
-      db.exec(`
-        CREATE TABLE conversations (id TEXT, project_path TEXT);
-        CREATE TABLE messages (id TEXT);
-        INSERT INTO conversations VALUES ('c1', '/old');
-      `);
-      db.close();
 
       // Test: Dry run
       const result = await handlers.migrateProject({
@@ -247,14 +261,6 @@ describe("Migration Tool Handlers", () => {
       mkdirSync(sourceFolder, { recursive: true });
 
       writeFileSync(join(sourceFolder, "source.jsonl"), 'source');
-
-      const db = new Database(join(sourceFolder, ".cccmemory.db"));
-      db.exec(`
-        CREATE TABLE conversations (id TEXT, project_path TEXT);
-        CREATE TABLE messages (id TEXT);
-        INSERT INTO conversations VALUES ('c1', '/old');
-      `);
-      db.close();
 
       // Create target folder with existing data (using same naming as handler)
       const targetFolder = join(projectsDir, "-new");
@@ -291,13 +297,9 @@ describe("Migration Tool Handlers", () => {
       mkdirSync(sourceFolder, { recursive: true });
 
       writeFileSync(join(sourceFolder, "session.jsonl"), 'content');
-
-      const db = new Database(join(sourceFolder, ".cccmemory.db"));
-      db.exec(`
-        CREATE TABLE conversations (id TEXT, project_path TEXT);
-        INSERT INTO conversations VALUES ('c1', '/old');
-      `);
-      db.close();
+      const db = getSQLiteManager().getDatabase();
+      const projectId = insertProject(db, "/old");
+      insertConversation(db, projectId, "/old", "c1", 1000);
 
       // Test: Execute migration
       await handlers.migrateProject({
@@ -308,8 +310,12 @@ describe("Migration Tool Handlers", () => {
       });
 
       // Verify: Backup created
-      const backupPath = join(sourceFolder, ".cccmemory.db.bak");
-      expect(existsSync(backupPath)).toBe(true);
+      const dbPath = getSQLiteManager().getDbPath();
+      const backupDir = dirname(dbPath);
+      const backups = readdirSync(backupDir).filter((name) =>
+        name.startsWith(`${basename(dbPath)}.bak.`)
+      );
+      expect(backups.length).toBeGreaterThan(0);
     });
 
     it("should preserve original source data", async () => {
@@ -319,13 +325,6 @@ describe("Migration Tool Handlers", () => {
 
       const originalContent = 'original content';
       writeFileSync(join(sourceFolder, "session.jsonl"), originalContent);
-
-      const db = new Database(join(sourceFolder, ".cccmemory.db"));
-      db.exec(`
-        CREATE TABLE conversations (id TEXT, project_path TEXT);
-        INSERT INTO conversations VALUES ('c1', '/old');
-      `);
-      db.close();
 
       // Test: Execute migration
       await handlers.migrateProject({
@@ -337,7 +336,6 @@ describe("Migration Tool Handlers", () => {
 
       // Verify: Original still exists and unchanged
       expect(existsSync(join(sourceFolder, "session.jsonl"))).toBe(true);
-      expect(existsSync(join(sourceFolder, ".cccmemory.db"))).toBe(true);
     });
   });
 });
