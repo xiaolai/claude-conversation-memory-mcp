@@ -15,7 +15,7 @@ export const TOOLS = {
         },
         session_id: {
           type: "string",
-          description: "Optional: specific session ID to index (e.g., 'a1172af3-ca62-41be-9b90-701cef39daae'). If not provided, indexes all sessions in the project.",
+          description: "Optional: specific session ID to index. Use the external session id (JSONL filename / Codex rollout id), e.g. 'a1172af3-ca62-41be-9b90-701cef39daae'. Internal DB ids are accepted but prefer list_recent_sessions.session_id.",
         },
         include_thinking: {
           type: "boolean",
@@ -74,7 +74,51 @@ export const TOOLS = {
         },
         conversation_id: {
           type: "string",
-          description: "Required when scope='current': the conversation/session ID to search within",
+          description: "Required when scope='current': internal conversation id from list_recent_sessions.id",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  search_project_conversations: {
+    name: "search_project_conversations",
+    description: "Search conversations scoped to a project path, optionally including both Claude Code and Codex sessions that match the same project root.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural language search query",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default: 10)",
+          default: 10,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0). Use with limit to fetch subsequent pages.",
+          default: 0,
+        },
+        date_range: {
+          type: "array",
+          description: "Optional date range filter [start_timestamp, end_timestamp]",
+          items: { type: "number" },
+        },
+        include_claude_code: {
+          type: "boolean",
+          description: "Include Claude Code conversations (default: true)",
+          default: true,
+        },
+        include_codex: {
+          type: "boolean",
+          description: "Include Codex conversations (default: true)",
+          default: true,
         },
       },
       required: ["query"],
@@ -113,7 +157,7 @@ export const TOOLS = {
         },
         conversation_id: {
           type: "string",
-          description: "Required when scope='current': the conversation/session ID to search within",
+          description: "Required when scope='current': internal conversation id from list_recent_sessions.id",
         },
       },
       required: ["query"],
@@ -237,7 +281,7 @@ export const TOOLS = {
         },
         conversation_id: {
           type: "string",
-          description: "Required when scope='current': the conversation/session ID to search within",
+          description: "Required when scope='current': internal conversation id from list_recent_sessions.id",
         },
       },
       required: ["query"],
@@ -309,7 +353,7 @@ export const TOOLS = {
         },
         conversation_id: {
           type: "string",
-          description: "Optional: filter by specific conversation session ID",
+          description: "Optional: filter by internal conversation id (list_recent_sessions.id)",
         },
         errors_only: {
           type: "boolean",
@@ -348,7 +392,7 @@ export const TOOLS = {
         },
         conversation_id: {
           type: "string",
-          description: "Required when scope='current': the conversation/session ID to search within",
+          description: "Required when scope='current': internal conversation id from list_recent_sessions.id",
         },
       },
       required: ["query"],
@@ -401,7 +445,7 @@ export const TOOLS = {
         },
         conversation_id: {
           type: "string",
-          description: "Required when scope='current': the conversation/session ID to search within",
+          description: "Required when scope='current': internal conversation id from list_recent_sessions.id",
         },
       },
       required: ["query"],
@@ -420,7 +464,7 @@ export const TOOLS = {
         },
         session_id: {
           type: "string",
-          description: "Optional: specific session ID to include. If not provided, includes all sessions.",
+          description: "Optional: internal conversation id (list_recent_sessions.id) to include. If not provided, includes all sessions.",
         },
         scope: {
           type: "string",
@@ -534,7 +578,7 @@ export const TOOLS = {
 
   list_recent_sessions: {
     name: "list_recent_sessions",
-    description: "List recent conversation sessions with summary info (date, message count, topics). Useful for understanding conversation history at a glance.",
+    description: "List recent conversation sessions with summary info (date, message count, topics). Returns both internal id and external session_id. Useful for understanding conversation history at a glance.",
     inputSchema: {
       type: "object",
       properties: {
@@ -551,6 +595,41 @@ export const TOOLS = {
         project_path: {
           type: "string",
           description: "Optional: filter to specific project path",
+        },
+      },
+    },
+  },
+
+  get_latest_session_summary: {
+    name: "get_latest_session_summary",
+    description: "Summarize the latest session for a project: what the agent is trying to solve, recent actions, and current errors.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        source_type: {
+          type: "string",
+          enum: ["claude-code", "codex", "all"],
+          description: "Filter by source type (default: all)",
+          default: "all",
+        },
+        limit_messages: {
+          type: "number",
+          description: "How many recent messages to consider (default: 20)",
+          default: 20,
+        },
+        include_tools: {
+          type: "boolean",
+          description: "Include recent tool actions (default: true)",
+          default: true,
+        },
+        include_errors: {
+          type: "boolean",
+          description: "Include recent tool errors (default: true)",
+          default: true,
         },
       },
     },
@@ -849,7 +928,7 @@ export const TOOLS = {
         session_id: {
           type: "string",
           description:
-            "Session ID to prepare handoff for (defaults to most recent session)",
+            "Internal conversation id (list_recent_sessions.id) to prepare handoff for (defaults to most recent session)",
         },
         include: {
           type: "array",

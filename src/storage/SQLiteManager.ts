@@ -5,12 +5,13 @@
 
 import Database from "better-sqlite3";
 import { readFileSync, mkdirSync, existsSync, openSync, closeSync, renameSync } from "fs";
-import { join, dirname, basename } from "path";
+import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { pathToProjectFolderName, escapeTableName } from "../utils/sanitization.js";
 import { getCanonicalProjectPath } from "../utils/worktree.js";
 import * as sqliteVec from "sqlite-vec";
+import { MigrationManager, migrations } from "./migrations.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +29,7 @@ export interface SQLiteConfig {
   projectPath?: string;
   readOnly?: boolean;
   verbose?: boolean;
+  dbMode?: "single" | "per-project";
   /** Memory-mapped I/O size in bytes (default: 1GB). Set to 0 to disable. */
   mmapSize?: number;
   /** Cache size in KB (default: 64MB) */
@@ -38,14 +40,17 @@ function resolveDbPath(config: SQLiteConfig = {}): string {
   const projectPath = config.projectPath || process.cwd();
   const canonicalPath = getCanonicalProjectPath(projectPath).canonicalPath;
   const projectFolderName = pathToProjectFolderName(canonicalPath);
+  const homeDir = process.env.HOME ? resolve(process.env.HOME) : homedir();
   const defaultPath = join(
-    homedir(),
+    homeDir,
     ".claude",
     "projects",
     projectFolderName,
     NEW_DB_FILE_NAME
   );
   const fallbackPath = join(canonicalPath, ".cccmemory", NEW_DB_FILE_NAME);
+  const singleDbPath = join(homeDir, NEW_DB_FILE_NAME);
+  const dbMode = config.dbMode || (process.env.CCCMEMORY_DB_MODE as "single" | "per-project" | undefined) || "single";
 
   const normalizeRequestedPath = (requestedPath: string): string => {
     const requestedBase = basename(requestedPath);
@@ -158,6 +163,32 @@ function resolveDbPath(config: SQLiteConfig = {}): string {
     }
     throw new Error(
       `Database path is not writable: ${normalizedPath}\n` +
+        "Fix permissions or set CCCMEMORY_DB_PATH to a writable file path.\n" +
+        "If you're running under Codex or Claude with a locked home dir (~/.claude or ~/.codex), " +
+        "you must set CCCMEMORY_DB_PATH explicitly."
+    );
+  }
+
+  if (dbMode === "single") {
+    if (config.readOnly) {
+      const migratedSingle = maybeMigrateLegacyDb(singleDbPath, true);
+      if (existsSync(migratedSingle)) {
+        return migratedSingle;
+      }
+      throw new Error(
+        `Database file not found at ${singleDbPath} (read-only mode).\n` +
+          "Create the database in write mode, or set CCCMEMORY_DB_PATH to an existing file."
+      );
+    }
+    const migratedSingle = maybeMigrateLegacyDb(singleDbPath, false);
+    if (migratedSingle !== singleDbPath) {
+      return migratedSingle;
+    }
+    if (canCreateDbFile(singleDbPath)) {
+      return singleDbPath;
+    }
+    throw new Error(
+      `Unable to create database at ${singleDbPath}.\n` +
         "Fix permissions or set CCCMEMORY_DB_PATH to a writable file path.\n" +
         "If you're running under Codex or Claude with a locked home dir (~/.claude or ~/.codex), " +
         "you must set CCCMEMORY_DB_PATH explicitly."
@@ -400,39 +431,42 @@ export class SQLiteManager {
 
         if (conversationsExists.length > 0) {
           // Check if conversations table has expected columns
-          const columns = this.db
+          const conversationColumns = this.db
             .prepare("PRAGMA table_info(conversations)")
             .all() as Array<{ name: string }>;
 
-          const hasSourceType = columns.some(
+          const hasSourceType = conversationColumns.some(
             (col) => col.name === "source_type"
           );
-          const hasMessageCount = columns.some(
+          const hasMessageCount = conversationColumns.some(
             (col) => col.name === "message_count"
           );
+          const hasProjectId = conversationColumns.some(
+            (col) => col.name === "project_id"
+          );
+          const hasExternalId = conversationColumns.some(
+            (col) => col.name === "external_id"
+          );
 
-          if (!hasSourceType || !hasMessageCount) {
+          const messagesExists = this.db
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+            )
+            .all();
+          const messageColumns = messagesExists.length > 0
+            ? (this.db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>)
+            : [];
+          const messageHasExternalId = messageColumns.some(
+            (col) => col.name === "external_id"
+          );
+
+          if (!hasSourceType || !hasMessageCount || !hasProjectId || !hasExternalId || !messageHasExternalId) {
             // Legacy database with incompatible schema - drop and recreate
             console.error(
               "⚠️ Legacy database detected with incompatible schema. Recreating..."
             );
 
-            // Get all table names
-            const allTables = this.db
-              .prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-              )
-              .all() as Array<{ name: string }>;
-
-            // Drop all tables (escape table names to prevent SQL injection)
-            for (const table of allTables) {
-              try {
-                const safeName = escapeTableName(table.name);
-                this.db.exec(`DROP TABLE IF EXISTS "${safeName}"`);
-              } catch (_e) {
-                // Ignore errors when dropping (virtual tables may have dependencies)
-              }
-            }
+            this.dropAllTables();
 
             console.error("Legacy tables dropped");
           }
@@ -448,17 +482,44 @@ export class SQLiteManager {
         // SQLite can handle multiple statements in a single exec() call
         this.db.exec(schema);
 
-        // Record schema version (current version is 3)
+        const latestVersion = migrations[migrations.length - 1]?.version ?? 1;
+        const latestDescription = migrations[migrations.length - 1]?.description ?? "Initial schema";
+
+        // Record schema version (schema.sql already includes latest tables)
         this.db
           .prepare(
             "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
           )
-          .run(3, Date.now(), "Initial schema with fixed FTS tables");
+          .run(latestVersion, Date.now(), latestDescription);
 
         console.error("Database schema initialized successfully");
       } else {
-        // Apply migrations if needed
-        this.applyMigrations();
+        // If schema_version exists, verify core columns match expected schema
+        if (this.isLegacySchema()) {
+          console.error(
+            "⚠️ Legacy database detected with incompatible schema. Recreating..."
+          );
+          this.dropAllTables();
+          console.error("Legacy tables dropped");
+
+          console.error("Initializing database schema...");
+          const schemaPath = join(__dirname, "schema.sql");
+          const schema = readFileSync(schemaPath, "utf-8");
+          this.db.exec(schema);
+
+          const latestVersion = migrations[migrations.length - 1]?.version ?? 1;
+          const latestDescription = migrations[migrations.length - 1]?.description ?? "Initial schema";
+          this.db
+            .prepare(
+              "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
+            )
+            .run(latestVersion, Date.now(), latestDescription);
+
+          console.error("Database schema initialized successfully");
+        } else {
+          // Apply migrations if needed
+          this.applyMigrations();
+        }
       }
     } catch (error) {
       console.error("Error initializing schema:", error);
@@ -466,160 +527,68 @@ export class SQLiteManager {
     }
   }
 
+  private isLegacySchema(): boolean {
+    const conversationsExists = this.db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"
+      )
+      .all();
+    if (conversationsExists.length === 0) {
+      return false;
+    }
+
+    const conversationColumns = this.db
+      .prepare("PRAGMA table_info(conversations)")
+      .all() as Array<{ name: string }>;
+    const hasProjectId = conversationColumns.some((col) => col.name === "project_id");
+    const hasExternalId = conversationColumns.some((col) => col.name === "external_id");
+
+    const messagesExists = this.db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+      )
+      .all();
+    const messageColumns = messagesExists.length > 0
+      ? (this.db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>)
+      : [];
+    const messageHasExternalId = messageColumns.some((col) => col.name === "external_id");
+
+    return !hasProjectId || !hasExternalId || !messageHasExternalId;
+  }
+
+  private dropAllTables(): void {
+    const allTables = this.db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      )
+      .all() as Array<{ name: string }>;
+
+    for (const table of allTables) {
+      try {
+        const safeName = escapeTableName(table.name);
+        this.db.exec(`DROP TABLE IF EXISTS "${safeName}"`);
+      } catch (_e) {
+        // Ignore errors when dropping (virtual tables may have dependencies)
+      }
+    }
+  }
+
   /**
    * Apply database migrations for existing databases
    */
   private applyMigrations(): void {
-    const currentVersion = this.getSchemaVersion();
+    // Ensure schema_version table exists (legacy DBs may not have it)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY,
+        applied_at INTEGER NOT NULL,
+        description TEXT,
+        checksum TEXT
+      )
+    `);
 
-    // Migration 1 -> 2: Add source_type column to conversations table
-    if (currentVersion < 2) {
-      try {
-        console.error("Applying migration: Adding source_type column...");
-
-        // Check if column already exists (in case of partial migration)
-        const columns = this.db
-          .prepare("PRAGMA table_info(conversations)")
-          .all() as Array<{ name: string }>;
-
-        const hasSourceType = columns.some((col) => col.name === "source_type");
-
-        if (!hasSourceType) {
-          this.db.exec(
-            "ALTER TABLE conversations ADD COLUMN source_type TEXT DEFAULT 'claude-code'"
-          );
-          this.db.exec(
-            "CREATE INDEX IF NOT EXISTS idx_conv_source ON conversations(source_type)"
-          );
-        }
-
-        // Record migration
-        this.db
-          .prepare(
-            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
-          )
-          .run(2, Date.now(), "Add source_type column and global index support");
-
-        console.error("Migration v2 applied successfully");
-      } catch (error) {
-        console.error("Error applying migration v2:", error);
-        throw error;
-      }
-    }
-
-    // Migration 2 -> 3: Fix messages_fts schema (remove non-existent context column)
-    if (currentVersion < 3) {
-      try {
-        console.error(
-          "Applying migration v3: Fixing messages_fts schema..."
-        );
-
-        // FTS5 virtual tables can't be altered, must drop and recreate
-        // The old schema had 'context' column which doesn't exist in messages table
-        this.db.exec("DROP TABLE IF EXISTS messages_fts");
-        this.db.exec(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-            id UNINDEXED,
-            content,
-            metadata,
-            content=messages,
-            content_rowid=rowid
-          )
-        `);
-
-        // Rebuild FTS index from messages table
-        try {
-          this.db.exec(
-            "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')"
-          );
-          console.error("FTS index rebuilt successfully");
-        } catch (ftsError) {
-          console.error(
-            "FTS rebuild warning:",
-            (ftsError as Error).message
-          );
-        }
-
-        // Record migration
-        this.db
-          .prepare(
-            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
-          )
-          .run(
-            3,
-            Date.now(),
-            "Fix messages_fts schema - remove context column"
-          );
-
-        console.error("Migration v3 applied successfully");
-      } catch (error) {
-        console.error("Error applying migration v3:", error);
-        throw error;
-      }
-    }
-
-    // Migration 3 -> 4: Add mistake_embeddings and mistakes_fts for semantic search
-    if (currentVersion < 4) {
-      try {
-        console.error(
-          "Applying migration v4: Adding mistake semantic search support..."
-        );
-
-        // Create mistake_embeddings table
-        this.db.exec(`
-          CREATE TABLE IF NOT EXISTS mistake_embeddings (
-            id TEXT PRIMARY KEY,
-            mistake_id TEXT NOT NULL,
-            embedding BLOB NOT NULL,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
-          )
-        `);
-        this.db.exec(
-          "CREATE INDEX IF NOT EXISTS idx_mistake_embeddings_mistake_id ON mistake_embeddings(mistake_id)"
-        );
-
-        // Create mistakes_fts FTS5 table (standalone, not content-synced)
-        this.db.exec(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS mistakes_fts USING fts5(
-            id,
-            what_went_wrong,
-            correction,
-            mistake_type
-          )
-        `);
-
-        // Populate FTS from existing mistakes
-        try {
-          this.db.exec(`
-            INSERT INTO mistakes_fts(id, what_went_wrong, correction, mistake_type)
-              SELECT id, what_went_wrong, COALESCE(correction, ''), mistake_type FROM mistakes
-          `);
-          console.error("Mistakes FTS index populated successfully");
-        } catch (ftsError) {
-          console.error(
-            "Mistakes FTS populate warning:",
-            (ftsError as Error).message
-          );
-        }
-
-        // Record migration
-        this.db
-          .prepare(
-            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
-          )
-          .run(
-            4,
-            Date.now(),
-            "Add mistake_embeddings and mistakes_fts for semantic search"
-          );
-
-        console.error("Migration v4 applied successfully");
-      } catch (error) {
-        console.error("Error applying migration v4:", error);
-        throw error;
-      }
-    }
+    const manager = new MigrationManager(this);
+    manager.applyPendingMigrations();
   }
 
   /**

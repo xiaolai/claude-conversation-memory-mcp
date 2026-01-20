@@ -127,7 +127,7 @@ ${chalk.bold("DESCRIPTION:")}
 
 ${chalk.bold("OPTIONS:")}
   --project <path>    Project path (default: current directory)
-  --session <id>      Index specific session only
+  --session <id>      Index specific session only (use list_recent_sessions.session_id)
   --exclude-mcp       Exclude MCP conversations
   --include-mcp       Include all MCP conversations
   --no-git            Disable git integration
@@ -137,7 +137,7 @@ ${chalk.bold("EXAMPLES:")}
   index
   index --exclude-mcp
   index --project /path/to/project
-  index --session abc123
+  index --session a1172af3-ca62-41be-9b90-701cef39daae
 
 ${chalk.bold("ALIASES:")}
   None

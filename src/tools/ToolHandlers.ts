@@ -127,6 +127,10 @@ export class ToolHandlers {
    * requiring manual indexing.
    */
   private async maybeAutoIndex(): Promise<void> {
+    if (process.env.NODE_ENV === 'test' || process.env.CCCMEMORY_DISABLE_AUTO_INDEX === '1') {
+      return;
+    }
+
     const now = Date.now();
 
     // If indexing is already in progress, wait for it
@@ -192,7 +196,7 @@ export class ToolHandlers {
   async indexConversations(args: Record<string, unknown>): Promise<Types.IndexConversationsResponse> {
     const typedArgs = args as Types.IndexConversationsArgs;
     const rawProjectPath = typedArgs.project_path || process.cwd();
-    const { canonicalPath, worktreePaths } = getWorktreeInfo(rawProjectPath);
+    const { canonicalPath } = getWorktreeInfo(rawProjectPath);
     const projectPath = canonicalPath;
     const sessionId = typedArgs.session_id;
     const includeThinking = typedArgs.include_thinking ?? false;
@@ -201,153 +205,52 @@ export class ToolHandlers {
     const excludeMcpServers = typedArgs.exclude_mcp_servers;
 
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
-    const globalIndex = new GlobalIndex();
+    const globalIndex = new GlobalIndex(this.db);
 
     try {
+      let resolvedSessionId = sessionId;
+      if (sessionId) {
+        const numericId = Number(sessionId);
+        const row = this.db.prepare(`
+          SELECT external_id
+          FROM conversations
+          WHERE project_path = ?
+            AND source_type = 'claude-code'
+            AND (external_id = ? OR id = ?)
+          LIMIT 1
+        `).get(projectPath, sessionId, Number.isFinite(numericId) ? numericId : -1) as
+          | { external_id: string }
+          | undefined;
+        if (row?.external_id) {
+          resolvedSessionId = row.external_id;
+        }
+      }
+
       let lastIndexedMs: number | undefined;
-      if (!sessionId) {
-        const existingProject = globalIndex.getProject(projectPath);
+      if (!resolvedSessionId) {
+        const existingProject = globalIndex.getProject(projectPath, "claude-code");
         if (existingProject) {
           lastIndexedMs = existingProject.last_indexed;
         }
       }
 
-      // Check if we need to use a project-specific database
-      // This is needed when indexing a different project than where the MCP server is running
-      const currentDbPath = this.db.getDbPath();
-      const targetProjectFolderName = pathToProjectFolderName(projectPath);
-      // Use exact path segment match to avoid false positives with substring matching
-      // e.g., "my-project" should not match "my-project-v2"
-      const isCurrentProject = currentDbPath.endsWith(`/${targetProjectFolderName}/`) ||
-                               currentDbPath.endsWith(`\\${targetProjectFolderName}\\`) ||
-                               currentDbPath.includes(`/${targetProjectFolderName}/`) ||
-                               currentDbPath.includes(`\\${targetProjectFolderName}\\`);
+      const indexResult = await this.memory.indexConversations({
+        projectPath,
+        sessionId: resolvedSessionId,
+        includeThinking,
+        enableGitIntegration: enableGit,
+        excludeMcpConversations,
+        excludeMcpServers,
+        lastIndexedMs,
+      });
 
-      let indexResult;
-      let stats;
+      const { ConversationStorage } = await import("../storage/ConversationStorage.js");
+      const storage = new ConversationStorage(this.db);
+      const stats = storage.getStatsForProject(projectPath, "claude-code");
 
-      if (!isCurrentProject) {
-        // Create a project-specific database for the target project
-        const { SQLiteManager } = await import("../storage/SQLiteManager.js");
-        const { ConversationStorage } = await import("../storage/ConversationStorage.js");
-        const { ConversationParser } = await import("../parsers/ConversationParser.js");
-        const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
-        const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
-        const { SemanticSearch } = await import("../search/SemanticSearch.js");
-        const { homedir } = await import("os");
-
-        // Create dedicated database in the target project's .claude folder
-        const projectDbPath = join(
-          homedir(),
-          ".claude",
-          "projects",
-          targetProjectFolderName,
-          ".cccmemory.db"
-        );
-
-        console.error(`\n📂 Using project-specific database for: ${projectPath}`);
-        console.error(`   Database path: ${projectDbPath}`);
-
-        const projectDb = new SQLiteManager({ dbPath: projectDbPath });
-
-        try {
-          const projectStorage = new ConversationStorage(projectDb);
-
-          // Parse conversations from the target project
-          const parser = new ConversationParser();
-          let parseResult = parser.parseProjects(
-            worktreePaths,
-            sessionId,
-            projectPath,
-            lastIndexedMs
-          );
-
-          // Filter MCP conversations if requested
-          if (excludeMcpConversations || excludeMcpServers) {
-            parseResult = this.filterMcpConversationsHelper(parseResult, {
-              excludeMcpConversations,
-              excludeMcpServers,
-            });
-          }
-
-          // Store basic entities
-          await projectStorage.storeConversations(parseResult.conversations);
-          await projectStorage.storeMessages(parseResult.messages);
-          await projectStorage.storeToolUses(parseResult.tool_uses);
-          await projectStorage.storeToolResults(parseResult.tool_results);
-          await projectStorage.storeFileEdits(parseResult.file_edits);
-
-          if (includeThinking !== false) {
-            await projectStorage.storeThinkingBlocks(parseResult.thinking_blocks);
-          }
-
-          // Extract and store decisions
-          const decisionExtractor = new DecisionExtractor();
-          const decisions = decisionExtractor.extractDecisions(
-            parseResult.messages,
-            parseResult.thinking_blocks
-          );
-          await projectStorage.storeDecisions(decisions);
-
-          // Extract and store mistakes
-          const mistakeExtractor = new MistakeExtractor();
-          const mistakes = mistakeExtractor.extractMistakes(
-            parseResult.messages,
-            parseResult.tool_results
-          );
-          await projectStorage.storeMistakes(mistakes);
-
-          // Generate embeddings for semantic search
-          let embeddingError: string | undefined;
-          try {
-            const semanticSearch = new SemanticSearch(projectDb);
-            await semanticSearch.indexMessages(parseResult.messages);
-            await semanticSearch.indexDecisions(decisions);
-            await semanticSearch.indexMistakes(mistakes);
-            // Also index any decisions/mistakes in DB that are missing embeddings
-            // (catches items created before embeddings were available)
-            await semanticSearch.indexMissingDecisionEmbeddings();
-            await semanticSearch.indexMissingMistakeEmbeddings();
-            console.error(`✓ Generated embeddings for project: ${projectPath}`);
-          } catch (embedError) {
-            embeddingError = (embedError as Error).message;
-            console.error(`⚠️ Embedding generation failed:`, embeddingError);
-            console.error("   FTS fallback will be used for search");
-          }
-
-          // Get stats
-          stats = projectStorage.getStats();
-
-          indexResult = {
-            embeddings_generated: !embeddingError,
-            embedding_error: embeddingError,
-            indexed_folders: parseResult.indexed_folders,
-            database_path: projectDbPath,
-          };
-        } finally {
-          // Close the project database
-          projectDb.close();
-        }
-      } else {
-        // Use the existing memory instance for the current project
-        indexResult = await this.memory.indexConversations({
-          projectPath,
-          sessionId,
-          includeThinking,
-          enableGitIntegration: enableGit,
-          excludeMcpConversations,
-          excludeMcpServers,
-          lastIndexedMs,
-        });
-
-        stats = this.memory.getStats();
-      }
-
-      const dbPathForIndex = indexResult.database_path || this.db.getDbPath();
       globalIndex.registerProject({
         project_path: projectPath,
         source_type: "claude-code",
-        db_path: dbPathForIndex,
         message_count: stats.messages.count,
         conversation_count: stats.conversations.count,
         decision_count: stats.decisions.count,
@@ -357,7 +260,11 @@ export class ToolHandlers {
         },
       });
 
-      const sessionInfo = sessionId ? ` (session: ${sessionId})` : ' (all sessions)';
+      const sessionLabel =
+        sessionId && resolvedSessionId && sessionId !== resolvedSessionId
+          ? `${sessionId} -> ${resolvedSessionId}`
+          : sessionId;
+      const sessionInfo = sessionLabel ? ` (session: ${sessionLabel})` : ' (all sessions)';
       let message = `Indexed ${stats.conversations.count} conversation(s) with ${stats.messages.count} messages${sessionInfo}`;
 
       // Add indexed folders info
@@ -391,88 +298,6 @@ export class ToolHandlers {
     } finally {
       globalIndex.close();
     }
-  }
-
-  /**
-   * Helper method to filter MCP conversations from parse results.
-   * Extracted to be usable in both the main indexConversations and project-specific indexing.
-   */
-  private filterMcpConversationsHelper<T extends {
-    conversations: unknown[];
-    messages: Array<{ id: string }>;
-    tool_uses: Array<{ id: string; tool_name: string; message_id: string }>;
-    tool_results: Array<{ tool_use_id: string; message_id: string }>;
-    file_edits: Array<{ message_id: string }>;
-    thinking_blocks: Array<{ message_id: string }>;
-    indexed_folders?: string[];
-  }>(
-    result: T,
-    options: { excludeMcpConversations?: boolean | 'self-only' | 'all-mcp'; excludeMcpServers?: string[] }
-  ): T {
-    // Determine which MCP servers to exclude
-    const serversToExclude = new Set<string>();
-
-    if (options.excludeMcpServers && options.excludeMcpServers.length > 0) {
-      options.excludeMcpServers.forEach(s => serversToExclude.add(s));
-    } else if (options.excludeMcpConversations === 'self-only') {
-      serversToExclude.add('cccmemory');
-    } else if (options.excludeMcpConversations === 'all-mcp' || options.excludeMcpConversations === true) {
-      for (const toolUse of result.tool_uses) {
-        if (toolUse.tool_name.startsWith('mcp__')) {
-          const parts = toolUse.tool_name.split('__');
-          if (parts.length >= 2) {
-            serversToExclude.add(parts[1]);
-          }
-        }
-      }
-    }
-
-    if (serversToExclude.size === 0) {
-      return result;
-    }
-
-    // Build set of excluded tool_use IDs
-    const excludedToolUseIds = new Set<string>();
-    for (const toolUse of result.tool_uses) {
-      if (toolUse.tool_name.startsWith('mcp__')) {
-        const parts = toolUse.tool_name.split('__');
-        if (parts.length >= 2 && serversToExclude.has(parts[1])) {
-          excludedToolUseIds.add(toolUse.id);
-        }
-      }
-    }
-
-    // Build set of excluded message IDs
-    const excludedMessageIds = new Set<string>();
-    for (const toolUse of result.tool_uses) {
-      if (excludedToolUseIds.has(toolUse.id)) {
-        excludedMessageIds.add(toolUse.message_id);
-      }
-    }
-    for (const toolResult of result.tool_results) {
-      if (excludedToolUseIds.has(toolResult.tool_use_id)) {
-        excludedMessageIds.add(toolResult.message_id);
-      }
-    }
-
-    if (excludedMessageIds.size > 0) {
-      console.error(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
-    }
-
-    const remainingMessageIds = new Set(
-      result.messages
-        .filter(m => !excludedMessageIds.has(m.id))
-        .map(m => m.id)
-    );
-
-    return {
-      ...result,
-      messages: result.messages.filter(m => !excludedMessageIds.has(m.id)),
-      tool_uses: result.tool_uses.filter(t => !excludedToolUseIds.has(t.id)),
-      tool_results: result.tool_results.filter(tr => !excludedToolUseIds.has(tr.tool_use_id)),
-      file_edits: result.file_edits.filter(fe => remainingMessageIds.has(fe.message_id)),
-      thinking_blocks: result.thinking_blocks.filter(tb => remainingMessageIds.has(tb.message_id)),
-    };
   }
 
   /**
@@ -517,77 +342,31 @@ export class ToolHandlers {
 
     // Handle global scope by delegating to searchAllConversations
     if (scope === 'global') {
-      const { GlobalIndex } = await import("../storage/GlobalIndex.js");
-      const { SQLiteManager } = await import("../storage/SQLiteManager.js");
-      const { SemanticSearch } = await import("../search/SemanticSearch.js");
-      const { getEmbeddingGenerator } = await import("../embeddings/EmbeddingGenerator.js");
+      const globalResponse = await this.searchAllConversations({
+        query,
+        limit,
+        offset,
+        date_range,
+        source_type: "all",
+      });
 
-      const globalIndex = new GlobalIndex();
-      const projects = globalIndex.getAllProjects();
-      const allResults: Types.SearchResult[] = [];
-
-      // Pre-compute query embedding once for all projects
-      let queryEmbedding: Float32Array | undefined;
-      try {
-        const embedder = await getEmbeddingGenerator();
-        if (embedder.isAvailable()) {
-          queryEmbedding = await embedder.embed(query);
-        }
-      } catch (_embeddingError) {
-        // Fall back to FTS
-      }
-
-      for (const project of projects) {
-        let projectDb: SQLiteManager | null = null;
-        try {
-          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
-          const semanticSearch = new SemanticSearch(projectDb);
-          const localResults = await semanticSearch.searchConversations(
-            query,
-            limit + offset,
-            undefined,
-            queryEmbedding
-          );
-
-          const filteredResults = date_range
-            ? localResults.filter((r: { message: { timestamp: number } }) => {
-                const timestamp = r.message.timestamp;
-                return timestamp >= date_range[0] && timestamp <= date_range[1];
-              })
-            : localResults;
-
-          for (const result of filteredResults) {
-            allResults.push({
-              conversation_id: result.conversation.id,
-              message_id: result.message.id,
-              timestamp: new Date(result.message.timestamp).toISOString(),
-              similarity: result.similarity,
-              snippet: result.snippet,
-              git_branch: result.conversation.git_branch,
-              message_type: result.message.message_type,
-              role: result.message.role,
-            });
-          }
-        } catch (error) {
-          // Track failed projects for debugging - don't silently ignore
-          console.error(`Search failed for project ${project.db_path}:`, (error as Error).message);
-          continue;
-        } finally {
-          if (projectDb) {
-            projectDb.close();
-          }
-        }
-      }
-
-      allResults.sort((a, b) => b.similarity - a.similarity);
-      const paginatedResults = allResults.slice(offset, offset + limit);
+      const results: Types.SearchResult[] = globalResponse.results.map((result) => ({
+        conversation_id: result.conversation_id,
+        message_id: result.message_id,
+        timestamp: result.timestamp,
+        similarity: result.similarity,
+        snippet: result.snippet,
+        git_branch: result.git_branch,
+        message_type: result.message_type,
+        role: result.role,
+      }));
 
       return {
         query,
-        results: paginatedResults,
-        total_found: paginatedResults.length,
-        has_more: offset + limit < allResults.length,
-        offset,
+        results,
+        total_found: globalResponse.total_found,
+        has_more: globalResponse.has_more,
+        offset: globalResponse.offset,
         scope: 'global',
       };
     }
@@ -661,6 +440,116 @@ export class ToolHandlers {
       has_more: offset + limit < filteredResults.length,
       offset,
       scope: 'all',
+    };
+  }
+
+  /**
+   * Search conversations scoped to a project, optionally including Codex sessions.
+   */
+  async searchProjectConversations(
+    args: Record<string, unknown>
+  ): Promise<Types.SearchProjectConversationsResponse> {
+    await this.maybeAutoIndex();
+    const { SemanticSearch } = await import("../search/SemanticSearch.js");
+    const { getEmbeddingGenerator } = await import("../embeddings/EmbeddingGenerator.js");
+    const typedArgs = args as unknown as Types.SearchProjectConversationsArgs;
+    const {
+      query,
+      project_path,
+      limit = 10,
+      offset = 0,
+      date_range,
+      include_claude_code = true,
+      include_codex = true,
+    } = typedArgs;
+
+    const rawProjectPath = project_path || process.cwd();
+    const { canonicalPath, worktreePaths } = getWorktreeInfo(rawProjectPath);
+    const allowedPaths = new Set<string>([canonicalPath, ...worktreePaths]);
+
+    const canonicalCache = new Map<string, string>();
+    const matchesProjectPath = (path?: string): boolean => {
+      if (!path) {
+        return false;
+      }
+      if (allowedPaths.has(path)) {
+        return true;
+      }
+      const cached = canonicalCache.get(path);
+      if (cached) {
+        return allowedPaths.has(cached);
+      }
+      const { canonicalPath: resolved } = getCanonicalProjectPath(path);
+      canonicalCache.set(path, resolved);
+      return allowedPaths.has(resolved);
+    };
+
+    // Pre-compute embedding once
+    let queryEmbedding: Float32Array | undefined;
+    try {
+      const embedder = await getEmbeddingGenerator();
+      if (embedder.isAvailable()) {
+        queryEmbedding = await embedder.embed(query);
+      }
+    } catch (_embeddingError) {
+      // Fall back to FTS
+    }
+
+    const allowedSources = new Set<string>();
+    if (include_claude_code) {
+      allowedSources.add("claude-code");
+    }
+    if (include_codex) {
+      allowedSources.add("codex");
+    }
+
+    const semanticSearch = new SemanticSearch(this.db);
+    const localResults = await semanticSearch.searchConversations(
+      query,
+      limit + offset + 50,
+      undefined,
+      queryEmbedding
+    );
+
+    const filteredResults = localResults.filter((r) => {
+      if (date_range) {
+        const timestamp = r.message.timestamp;
+        if (timestamp < date_range[0] || timestamp > date_range[1]) {
+          return false;
+        }
+      }
+      const sourceType = r.conversation.source_type || "claude-code";
+      if (!allowedSources.has(sourceType)) {
+        return false;
+      }
+      return matchesProjectPath(r.conversation.project_path);
+    });
+
+    const results: Types.SearchProjectResult[] = filteredResults.map((result) => ({
+      conversation_id: result.conversation.id,
+      message_id: result.message.id,
+      timestamp: new Date(result.message.timestamp).toISOString(),
+      similarity: result.similarity,
+      snippet: result.snippet,
+      git_branch: result.conversation.git_branch,
+      message_type: result.message.message_type,
+      role: result.message.role,
+      project_path: result.conversation.project_path,
+      source_type: (result.conversation.source_type || "claude-code") as "claude-code" | "codex",
+    }));
+
+    results.sort((a, b) => b.similarity - a.similarity);
+    const paginatedResults = results.slice(offset, offset + limit);
+
+    return {
+      query,
+      project_path: canonicalPath,
+      results: paginatedResults,
+      total_found: paginatedResults.length,
+      has_more: offset + limit < results.length,
+      offset,
+      include_claude_code,
+      include_codex,
     };
   }
 
@@ -997,7 +886,12 @@ export class ToolHandlers {
       throw new Error("Global scope is not supported for linkCommitsToConversations (git commits are project-specific)");
     }
 
-    let sql = "SELECT * FROM git_commits WHERE 1=1";
+    let sql = `
+      SELECT gc.*, c.external_id as conversation_external_id
+      FROM git_commits gc
+      LEFT JOIN conversations c ON gc.conversation_id = c.id
+      WHERE 1=1
+    `;
     const params: (string | number)[] = [];
 
     if (conversation_id || scope === 'current') {
@@ -1005,7 +899,7 @@ export class ToolHandlers {
       if (!targetId) {
         throw new Error("conversation_id is required when scope='current'");
       }
-      sql += " AND conversation_id = ?";
+      sql += " AND c.external_id = ?";
       params.push(targetId);
     }
 
@@ -1018,7 +912,9 @@ export class ToolHandlers {
     params.push(limit + 1); // Fetch one extra to determine has_more
     params.push(offset);
 
-    const commits = this.db.prepare(sql).all(...params) as Types.GitCommitRow[];
+    const commits = this.db
+      .prepare(sql)
+      .all(...params) as Array<Types.GitCommitRow & { conversation_external_id?: string | null }>;
     const hasMore = commits.length > limit;
     const results = hasMore ? commits.slice(0, limit) : commits;
 
@@ -1033,7 +929,7 @@ export class ToolHandlers {
         timestamp: new Date(c.timestamp).toISOString(),
         branch: c.branch,
         files_changed: safeJsonParse<string[]>(c.files_changed, []),
-        conversation_id: c.conversation_id,
+        conversation_id: c.conversation_external_id ?? undefined,
       })),
       total_found: results.length,
       has_more: hasMore,
@@ -1159,7 +1055,12 @@ export class ToolHandlers {
 
     // Fallback to LIKE search
     const sanitized = sanitizeForLike(query);
-    let sql = "SELECT * FROM mistakes WHERE what_went_wrong LIKE ? ESCAPE '\\'";
+    let sql = `
+      SELECT m.*, m.external_id as mistake_external_id, c.external_id as conversation_external_id
+      FROM mistakes m
+      JOIN conversations c ON m.conversation_id = c.id
+      WHERE m.what_went_wrong LIKE ? ESCAPE '\\'
+    `;
     const params: (string | number)[] = [`%${sanitized}%`];
 
     if (mistake_type) {
@@ -1172,7 +1073,7 @@ export class ToolHandlers {
       if (!conversation_id) {
         throw new Error("conversation_id is required when scope='current'");
       }
-      sql += " AND conversation_id = ?";
+      sql += " AND c.external_id = ?";
       params.push(conversation_id);
     }
 
@@ -1180,7 +1081,9 @@ export class ToolHandlers {
     params.push(limit + 1); // Fetch one extra to determine has_more
     params.push(offset);
 
-    const mistakes = this.db.prepare(sql).all(...params) as Types.MistakeRow[];
+    const mistakes = this.db
+      .prepare(sql)
+      .all(...params) as Array<Types.MistakeRow & { mistake_external_id: string }>;
     const hasMore = mistakes.length > limit;
     const results = hasMore ? mistakes.slice(0, limit) : mistakes;
 
@@ -1188,7 +1091,7 @@ export class ToolHandlers {
       query,
       mistake_type,
       mistakes: results.map((m) => ({
-        mistake_id: m.id,
+        mistake_id: m.mistake_external_id,
         mistake_type: m.mistake_type,
         what_went_wrong: m.what_went_wrong,
         correction: m.correction,
@@ -2381,7 +2284,7 @@ export class ToolHandlers {
     try {
       interface SessionRow {
         id: string;
-        session_id: string;
+        external_id: string;
         project_path: string;
         created_at: number;
         message_count: number;
@@ -2395,7 +2298,7 @@ export class ToolHandlers {
         query = `
           SELECT
             c.id,
-            c.id as session_id,
+            c.external_id,
             c.project_path,
             c.created_at,
             (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count,
@@ -2410,7 +2313,7 @@ export class ToolHandlers {
         query = `
           SELECT
             c.id,
-            c.id as session_id,
+            c.external_id,
             c.project_path,
             c.created_at,
             (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count,
@@ -2437,10 +2340,10 @@ export class ToolHandlers {
       const countRow = this.db.prepare(countQuery).get(...countParams) as CountRow;
       const totalSessions = countRow?.total || 0;
 
-      return {
-        sessions: sessions.map((s) => ({
+        return {
+          sessions: sessions.map((s) => ({
           id: s.id,
-          session_id: s.session_id,
+          session_id: s.external_id,
           project_path: s.project_path,
           created_at: s.created_at,
           message_count: s.message_count,
@@ -2458,6 +2361,209 @@ export class ToolHandlers {
         total_sessions: 0,
         has_more: false,
         message: `Error listing sessions: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Summarize the latest session for a project.
+   *
+   * Returns the most recent conversation and a lightweight summary of
+   * what is being worked on, recent actions, and errors.
+   */
+  async getLatestSessionSummary(args: Record<string, unknown>): Promise<Types.GetLatestSessionSummaryResponse> {
+    const typedArgs = args as unknown as Types.GetLatestSessionSummaryArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+    const sourceType = typedArgs.source_type ?? "all";
+    const limitMessages = Math.max(1, Math.min(typedArgs.limit_messages ?? 20, 200));
+    const includeTools = typedArgs.include_tools !== false;
+    const includeErrors = typedArgs.include_errors !== false;
+
+    const truncate = (input: string, maxLength: number): string => {
+      const trimmed = input.trim().replace(/\s+/g, " ");
+      if (trimmed.length <= maxLength) {
+        return trimmed;
+      }
+      return `${trimmed.slice(0, maxLength - 1)}…`;
+    };
+
+    try {
+      let query = `
+        SELECT
+          c.id,
+          c.external_id,
+          c.project_path,
+          c.source_type,
+          c.created_at,
+          c.last_message_at,
+          c.message_count
+        FROM conversations c
+      `;
+      const params: Array<string | number> = [];
+      const clauses: string[] = [];
+
+      if (projectPath) {
+        clauses.push("c.project_path = ?");
+        params.push(projectPath);
+      }
+
+      if (sourceType !== "all") {
+        clauses.push("c.source_type = ?");
+        params.push(sourceType);
+      }
+
+      if (clauses.length > 0) {
+        query += ` WHERE ${clauses.join(" AND ")}`;
+      }
+
+      query += " ORDER BY c.last_message_at DESC LIMIT 1";
+
+      const sessionRow = this.db.prepare(query).get(...params) as
+        | {
+            id: number;
+            external_id: string;
+            project_path: string;
+            source_type: "claude-code" | "codex";
+            created_at: number;
+            last_message_at: number;
+            message_count: number;
+          }
+        | undefined;
+
+      if (!sessionRow) {
+        return {
+          success: true,
+          found: false,
+          message: "No sessions found",
+        };
+      }
+
+      const messageRows = this.db.prepare(`
+        SELECT
+          m.id,
+          m.message_type,
+          m.role,
+          m.content,
+          m.timestamp
+        FROM messages m
+        WHERE m.conversation_id = ?
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+      `).all(sessionRow.id, limitMessages) as Array<{
+        id: number;
+        message_type: string;
+        role: string | null;
+        content: string | null;
+        timestamp: number;
+      }>;
+
+      const recentUserMessages: Array<{ timestamp: number; content: string }> = [];
+      const recentAssistantMessages: Array<{ timestamp: number; content: string }> = [];
+
+      for (const row of messageRows) {
+        if (!row.content) {
+          continue;
+        }
+        const snippet = truncate(row.content, 280);
+        if (row.role === "user" || row.message_type === "user") {
+          if (recentUserMessages.length < 3) {
+            recentUserMessages.push({ timestamp: row.timestamp, content: snippet });
+          }
+        } else if (row.role === "assistant" || row.message_type === "assistant") {
+          if (recentAssistantMessages.length < 3) {
+            recentAssistantMessages.push({ timestamp: row.timestamp, content: snippet });
+          }
+        }
+      }
+
+      const problemStatementSource = recentUserMessages[0] ?? recentAssistantMessages[0];
+      const problemStatement = problemStatementSource?.content;
+
+      const recentActions: Array<{
+        tool_name: string;
+        timestamp: number;
+        tool_input: Record<string, unknown>;
+      }> = [];
+
+      if (includeTools) {
+        const toolRows = this.db.prepare(`
+          SELECT
+            tu.tool_name,
+            tu.tool_input,
+            tu.timestamp
+          FROM tool_uses tu
+          JOIN messages m ON m.id = tu.message_id
+          WHERE m.conversation_id = ?
+          ORDER BY tu.timestamp DESC
+          LIMIT 5
+        `).all(sessionRow.id) as Array<{ tool_name: string; tool_input: string; timestamp: number }>;
+
+        for (const row of toolRows) {
+          recentActions.push({
+            tool_name: row.tool_name,
+            timestamp: row.timestamp,
+            tool_input: safeJsonParse(row.tool_input, {}),
+          });
+        }
+      }
+
+      const errors: Array<{ tool_name: string; timestamp: number; message: string }> = [];
+      if (includeErrors) {
+        const errorRows = this.db.prepare(`
+          SELECT
+            tu.tool_name,
+            tr.timestamp,
+            tr.content,
+            tr.stderr
+          FROM tool_results tr
+          JOIN tool_uses tu ON tu.id = tr.tool_use_id
+          JOIN messages m ON m.id = tr.message_id
+          WHERE m.conversation_id = ? AND tr.is_error = 1
+          ORDER BY tr.timestamp DESC
+          LIMIT 5
+        `).all(sessionRow.id) as Array<{
+          tool_name: string;
+          timestamp: number;
+          content: string | null;
+          stderr: string | null;
+        }>;
+
+        for (const row of errorRows) {
+          const message = row.stderr || row.content || "Unknown error";
+          errors.push({
+            tool_name: row.tool_name,
+            timestamp: row.timestamp,
+            message: truncate(message, 280),
+          });
+        }
+      }
+
+      return {
+        success: true,
+        found: true,
+        session: {
+          id: String(sessionRow.id),
+          session_id: sessionRow.external_id,
+          project_path: sessionRow.project_path,
+          source_type: sessionRow.source_type,
+          created_at: sessionRow.created_at,
+          last_message_at: sessionRow.last_message_at,
+          message_count: sessionRow.message_count,
+        },
+        summary: {
+          problem_statement: problemStatement,
+          recent_user_messages: recentUserMessages,
+          recent_assistant_messages: recentAssistantMessages,
+          recent_actions: includeTools ? recentActions : undefined,
+          errors: includeErrors ? errors : undefined,
+        },
+        message: "Latest session summary generated",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        found: false,
+        message: `Error generating latest session summary: ${(error as Error).message}`,
       };
     }
   }
@@ -2488,7 +2594,7 @@ export class ToolHandlers {
       incremental = true,
     } = typedArgs;
 
-    const globalIndex = new GlobalIndex();
+    const globalIndex = new GlobalIndex(this.db);
 
     try {
       const projects: Array<{
@@ -2505,7 +2611,6 @@ export class ToolHandlers {
         conversation_count: number;
         decision_count: number;
         mistake_count: number;
-        db_path: string;
         indexed_folders: Set<string>;
       }>();
 
@@ -2513,121 +2618,170 @@ export class ToolHandlers {
       let totalConversations = 0;
       let totalDecisions = 0;
       let totalMistakes = 0;
+      let shouldRebuildFts = false;
+
+      const { ConversationStorage } = await import("../storage/ConversationStorage.js");
+      const { SemanticSearch } = await import("../search/SemanticSearch.js");
+      const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
+      const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
+      const { RequirementsExtractor } = await import("../parsers/RequirementsExtractor.js");
+
+      const storage = new ConversationStorage(this.db);
+      const semanticSearch = new SemanticSearch(this.db);
+      const decisionExtractor = new DecisionExtractor();
+      const mistakeExtractor = new MistakeExtractor();
+      const requirementsExtractor = new RequirementsExtractor();
 
       // Index Codex if requested
       if (include_codex && existsSync(codex_path)) {
         try {
           const { CodexConversationParser } = await import("../parsers/CodexConversationParser.js");
-          const { SQLiteManager } = await import("../storage/SQLiteManager.js");
-          const { ConversationStorage } = await import("../storage/ConversationStorage.js");
-          const { SemanticSearch } = await import("../search/SemanticSearch.js");
-          const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
-          const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
 
-          // Create dedicated database for Codex
-          const codexDbPath = join(codex_path, ".cccmemory.db");
-          const codexDb = new SQLiteManager({ dbPath: codexDbPath });
-          const resolvedCodexDbPath = codexDb.getDbPath();
-
-          try {
-            const codexStorage = new ConversationStorage(codexDb);
-
-            // Get last indexed time for incremental mode
-            let codexLastIndexedMs: number | undefined;
-            if (incremental) {
-              const existingProject = globalIndex.getProject(codex_path);
-              if (existingProject) {
-                codexLastIndexedMs = existingProject.last_indexed;
-              }
+          // Get last indexed time for incremental mode (across all codex projects)
+          let codexLastIndexedMs: number | undefined;
+          if (incremental) {
+            const existingCodexProjects = globalIndex.getAllProjects("codex");
+            const maxIndexed = existingCodexProjects.reduce(
+              (max, project) => Math.max(max, project.last_indexed),
+              0
+            );
+            if (maxIndexed > 0) {
+              codexLastIndexedMs = maxIndexed;
             }
+          }
 
-            // Parse Codex sessions
-            const parser = new CodexConversationParser();
-            const parseResult = parser.parseSession(codex_path, undefined, codexLastIndexedMs);
+          // Parse Codex sessions
+          const parser = new CodexConversationParser();
+          const parseResult = parser.parseSession(codex_path, undefined, codexLastIndexedMs);
 
-            // Store all parsed data (skip FTS rebuild for performance, will rebuild once at end)
-            await codexStorage.storeConversations(parseResult.conversations);
-            await codexStorage.storeMessages(parseResult.messages, true);
-            await codexStorage.storeToolUses(parseResult.tool_uses);
-            await codexStorage.storeToolResults(parseResult.tool_results);
-            await codexStorage.storeFileEdits(parseResult.file_edits);
-            await codexStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+          if (parseResult.messages.length > 0) {
+            shouldRebuildFts = true;
 
-            // Extract and store decisions
-            const decisionExtractor = new DecisionExtractor();
+            const conversationIdMap = await storage.storeConversations(parseResult.conversations);
+            const messageIdMap = await storage.storeMessages(parseResult.messages, {
+              skipFtsRebuild: true,
+              conversationIdMap,
+            });
+            const toolUseIdMap = await storage.storeToolUses(parseResult.tool_uses, messageIdMap);
+            await storage.storeToolResults(parseResult.tool_results, messageIdMap, toolUseIdMap);
+            await storage.storeFileEdits(parseResult.file_edits, conversationIdMap, messageIdMap);
+            await storage.storeThinkingBlocks(parseResult.thinking_blocks, messageIdMap);
+
             const decisions = decisionExtractor.extractDecisions(
               parseResult.messages,
               parseResult.thinking_blocks
             );
-            await codexStorage.storeDecisions(decisions, true);
+            const decisionIdMap = await storage.storeDecisions(decisions, {
+              skipFtsRebuild: true,
+              conversationIdMap,
+              messageIdMap,
+            });
 
-            // Rebuild FTS indexes once after all data is stored
-            codexStorage.rebuildAllFts();
-
-            // Extract and store mistakes
-            const mistakeExtractor = new MistakeExtractor();
             const mistakes = mistakeExtractor.extractMistakes(
               parseResult.messages,
               parseResult.tool_results
             );
-            await codexStorage.storeMistakes(mistakes);
+            const mistakeIdMap = await storage.storeMistakes(mistakes, conversationIdMap, messageIdMap);
+
+            const requirements = requirementsExtractor.extractRequirements(parseResult.messages);
+            await storage.storeRequirements(requirements, conversationIdMap, messageIdMap);
+
+            const validations = requirementsExtractor.extractValidations(
+              parseResult.tool_uses,
+              parseResult.tool_results,
+              parseResult.messages
+            );
+            await storage.storeValidations(validations, conversationIdMap);
 
             // Generate embeddings for semantic search
             try {
-              const semanticSearch = new SemanticSearch(codexDb);
-              await semanticSearch.indexMessages(parseResult.messages, incremental);
-              await semanticSearch.indexDecisions(decisions, incremental);
-              console.error(`✓ Generated embeddings for Codex project`);
+              const messagesForEmbedding = parseResult.messages
+                .map((message) => {
+                  const internalId = messageIdMap.get(message.id);
+                  if (!internalId || !message.content) {
+                    return null;
+                  }
+                  return { id: internalId, content: message.content };
+                })
+                .filter((message): message is { id: number; content: string } => Boolean(message));
+
+              const decisionsForEmbedding: Array<{
+                id: number;
+                decision_text: string;
+                rationale?: string;
+                context?: string | null;
+              }> = [];
+              for (const decision of decisions) {
+                const internalId = decisionIdMap.get(decision.id);
+                if (!internalId) {
+                  continue;
+                }
+                decisionsForEmbedding.push({
+                  id: internalId,
+                  decision_text: decision.decision_text,
+                  rationale: decision.rationale,
+                  context: decision.context ?? null,
+                });
+              }
+
+              const mistakesForEmbedding: Array<{
+                id: number;
+                what_went_wrong: string;
+                correction?: string | null;
+                mistake_type: string;
+              }> = [];
+              for (const mistake of mistakes) {
+                const internalId = mistakeIdMap.get(mistake.id);
+                if (!internalId) {
+                  continue;
+                }
+                mistakesForEmbedding.push({
+                  id: internalId,
+                  what_went_wrong: mistake.what_went_wrong,
+                  correction: mistake.correction ?? null,
+                  mistake_type: mistake.mistake_type,
+                });
+              }
+
+              await semanticSearch.indexMessages(messagesForEmbedding, incremental);
+              await semanticSearch.indexDecisions(decisionsForEmbedding, incremental);
+              await semanticSearch.indexMistakes(mistakesForEmbedding, incremental);
+              await semanticSearch.indexMissingDecisionEmbeddings();
+              await semanticSearch.indexMissingMistakeEmbeddings();
+              console.error("✓ Generated embeddings for Codex sessions");
             } catch (embedError) {
               console.error("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
               console.error("   FTS fallback will be used for search");
             }
+          }
 
-            // Get stats from the database
-            const stats = codexDb.getDatabase()
-              .prepare("SELECT COUNT(*) as count FROM conversations")
-              .get() as { count: number };
-
-            const messageStats = codexDb.getDatabase()
-              .prepare("SELECT COUNT(*) as count FROM messages")
-              .get() as { count: number };
-
-            const decisionStats = codexDb.getDatabase()
-              .prepare("SELECT COUNT(*) as count FROM decisions")
-              .get() as { count: number };
-
-            const mistakeStats = codexDb.getDatabase()
-              .prepare("SELECT COUNT(*) as count FROM mistakes")
-              .get() as { count: number };
-
-            // Register in global index
+          const codexProjectPaths = new Set(parseResult.conversations.map((conv) => conv.project_path));
+          for (const projectPath of codexProjectPaths) {
+            const stats = storage.getStatsForProject(projectPath, "codex");
             globalIndex.registerProject({
-              project_path: codex_path,
+              project_path: projectPath,
               source_type: "codex",
-              db_path: resolvedCodexDbPath,
-              message_count: messageStats.count,
-              conversation_count: stats.count,
-              decision_count: decisionStats.count,
-              mistake_count: mistakeStats.count,
+              source_root: codex_path,
+              message_count: stats.messages.count,
+              conversation_count: stats.conversations.count,
+              decision_count: stats.decisions.count,
+              mistake_count: stats.mistakes.count,
               metadata: {
                 indexed_folders: parseResult.indexed_folders || [],
               },
             });
 
             projects.push({
-              project_path: codex_path,
+              project_path: projectPath,
               source_type: "codex",
-              message_count: messageStats.count,
-              conversation_count: stats.count,
+              message_count: stats.messages.count,
+              conversation_count: stats.conversations.count,
             });
 
-            totalMessages += messageStats.count;
-            totalConversations += stats.count;
-            totalDecisions += decisionStats.count;
-            totalMistakes += mistakeStats.count;
-          } finally {
-            // Always close the Codex database to prevent handle leaks
-            codexDb.close();
+            totalMessages += stats.messages.count;
+            totalConversations += stats.conversations.count;
+            totalDecisions += stats.decisions.count;
+            totalMistakes += stats.mistakes.count;
           }
         } catch (error) {
           errors.push({
@@ -2640,11 +2794,7 @@ export class ToolHandlers {
       // Index Claude Code projects if requested
       if (include_claude_code && existsSync(claude_projects_path)) {
         try {
-          const { SQLiteManager } = await import("../storage/SQLiteManager.js");
-          const { ConversationStorage } = await import("../storage/ConversationStorage.js");
           const { ConversationParser } = await import("../parsers/ConversationParser.js");
-          const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
-          const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
           const { statSync } = await import("fs");
 
           const projectFolders = readdirSync(claude_projects_path);
@@ -2681,7 +2831,7 @@ export class ToolHandlers {
                 if (metadataIndexed) {
                   lastIndexedMs = metadataIndexed;
                 } else {
-                  const existingProject = globalIndex.getProject(folderPath);
+                  const existingProject = globalIndex.getProject(folderPath, "claude-code");
                   if (existingProject) {
                     lastIndexedMs = existingProject.last_indexed;
                   }
@@ -2708,67 +2858,104 @@ export class ToolHandlers {
                 }
               }
 
-              const projectDb = new SQLiteManager({ projectPath: canonicalProjectPath });
-              const projectDbPath = projectDb.getDbPath();
+              shouldRebuildFts = true;
 
+              const conversationIdMap = await storage.storeConversations(parseResult.conversations);
+              const messageIdMap = await storage.storeMessages(parseResult.messages, {
+                skipFtsRebuild: true,
+                conversationIdMap,
+              });
+              const toolUseIdMap = await storage.storeToolUses(parseResult.tool_uses, messageIdMap);
+              await storage.storeToolResults(parseResult.tool_results, messageIdMap, toolUseIdMap);
+              await storage.storeFileEdits(parseResult.file_edits, conversationIdMap, messageIdMap);
+              await storage.storeThinkingBlocks(parseResult.thinking_blocks, messageIdMap);
+
+              const decisions = decisionExtractor.extractDecisions(
+                parseResult.messages,
+                parseResult.thinking_blocks
+              );
+              const decisionIdMap = await storage.storeDecisions(decisions, {
+                skipFtsRebuild: true,
+                conversationIdMap,
+                messageIdMap,
+              });
+
+              const mistakes = mistakeExtractor.extractMistakes(
+                parseResult.messages,
+                parseResult.tool_results
+              );
+              const mistakeIdMap = await storage.storeMistakes(mistakes, conversationIdMap, messageIdMap);
+
+              const requirements = requirementsExtractor.extractRequirements(parseResult.messages);
+              await storage.storeRequirements(requirements, conversationIdMap, messageIdMap);
+
+              const validations = requirementsExtractor.extractValidations(
+                parseResult.tool_uses,
+                parseResult.tool_results,
+                parseResult.messages
+              );
+              await storage.storeValidations(validations, conversationIdMap);
+
+              // Generate embeddings for semantic search
               try {
-                const projectStorage = new ConversationStorage(projectDb);
+                const messagesForEmbedding = parseResult.messages
+                  .map((message) => {
+                    const internalId = messageIdMap.get(message.id);
+                    if (!internalId || !message.content) {
+                      return null;
+                    }
+                    return { id: internalId, content: message.content };
+                  })
+                  .filter((message): message is { id: number; content: string } => Boolean(message));
 
-                // Store all parsed data (skip FTS rebuild for performance, will rebuild once at end)
-                await projectStorage.storeConversations(parseResult.conversations);
-                await projectStorage.storeMessages(parseResult.messages, true);
-                await projectStorage.storeToolUses(parseResult.tool_uses);
-                await projectStorage.storeToolResults(parseResult.tool_results);
-                await projectStorage.storeFileEdits(parseResult.file_edits);
-                await projectStorage.storeThinkingBlocks(parseResult.thinking_blocks);
-
-                // Extract and store decisions
-                const decisionExtractor = new DecisionExtractor();
-                const decisions = decisionExtractor.extractDecisions(
-                  parseResult.messages,
-                  parseResult.thinking_blocks
-                );
-                await projectStorage.storeDecisions(decisions, true);
-
-                // Rebuild FTS indexes once after all data is stored
-                projectStorage.rebuildAllFts();
-
-                // Extract and store mistakes
-                const mistakeExtractor = new MistakeExtractor();
-                const mistakes = mistakeExtractor.extractMistakes(
-                  parseResult.messages,
-                  parseResult.tool_results
-                );
-                await projectStorage.storeMistakes(mistakes);
-
-                // Generate embeddings for semantic search
-                try {
-                  const { SemanticSearch } = await import("../search/SemanticSearch.js");
-                  const semanticSearch = new SemanticSearch(projectDb);
-                  await semanticSearch.indexMessages(parseResult.messages, incremental);
-                  await semanticSearch.indexDecisions(decisions, incremental);
-                  console.error(`✓ Generated embeddings for project: ${canonicalProjectPath}`);
-                } catch (embedError) {
-                  console.error(`⚠️ Embedding generation failed for ${canonicalProjectPath}:`, (embedError as Error).message);
-                  console.error("   FTS fallback will be used for search");
+                const decisionsForEmbedding: Array<{
+                  id: number;
+                  decision_text: string;
+                  rationale?: string;
+                  context?: string | null;
+                }> = [];
+                for (const decision of decisions) {
+                  const internalId = decisionIdMap.get(decision.id);
+                  if (!internalId) {
+                    continue;
+                  }
+                  decisionsForEmbedding.push({
+                    id: internalId,
+                    decision_text: decision.decision_text,
+                    rationale: decision.rationale,
+                    context: decision.context ?? null,
+                  });
                 }
 
-                // Get stats from the database
-                const stats = projectDb.getDatabase()
-                  .prepare("SELECT COUNT(*) as count FROM conversations")
-                  .get() as { count: number };
+                const mistakesForEmbedding: Array<{
+                  id: number;
+                  what_went_wrong: string;
+                  correction?: string | null;
+                  mistake_type: string;
+                }> = [];
+                for (const mistake of mistakes) {
+                  const internalId = mistakeIdMap.get(mistake.id);
+                  if (!internalId) {
+                    continue;
+                  }
+                  mistakesForEmbedding.push({
+                    id: internalId,
+                    what_went_wrong: mistake.what_went_wrong,
+                    correction: mistake.correction ?? null,
+                    mistake_type: mistake.mistake_type,
+                  });
+                }
 
-                const messageStats = projectDb.getDatabase()
-                  .prepare("SELECT COUNT(*) as count FROM messages")
-                  .get() as { count: number };
-
-                const decisionStats = projectDb.getDatabase()
-                  .prepare("SELECT COUNT(*) as count FROM decisions")
-                  .get() as { count: number };
-
-                const mistakeStats = projectDb.getDatabase()
-                  .prepare("SELECT COUNT(*) as count FROM mistakes")
-                  .get() as { count: number };
+                await semanticSearch.indexMessages(messagesForEmbedding, incremental);
+                await semanticSearch.indexDecisions(decisionsForEmbedding, incremental);
+                await semanticSearch.indexMistakes(mistakesForEmbedding, incremental);
+                await semanticSearch.indexMissingDecisionEmbeddings();
+                await semanticSearch.indexMissingMistakeEmbeddings();
+                console.error(`✓ Generated embeddings for project: ${canonicalProjectPath}`);
+              } catch (embedError) {
+                console.error(`⚠️ Embedding generation failed for ${canonicalProjectPath}:`, (embedError as Error).message);
+                console.error("   FTS fallback will be used for search");
+              }
 
               const existingAggregate = claudeProjectsByPath.get(canonicalProjectPath);
               const indexedFolders = existingAggregate
@@ -2776,15 +2963,17 @@ export class ToolHandlers {
                 : new Set<string>();
               indexedFolders.add(folderPath);
 
+              const stats = storage.getStatsForProject(canonicalProjectPath, "claude-code");
+
               // Register in global index with the canonical project path
               globalIndex.registerProject({
                 project_path: canonicalProjectPath,
                 source_type: "claude-code",
-                db_path: projectDbPath,
-                message_count: messageStats.count,
-                conversation_count: stats.count,
-                decision_count: decisionStats.count,
-                mistake_count: mistakeStats.count,
+                source_root: claude_projects_path,
+                message_count: stats.messages.count,
+                conversation_count: stats.conversations.count,
+                decision_count: stats.decisions.count,
+                mistake_count: stats.mistakes.count,
                 metadata: {
                   indexed_folders: Array.from(indexedFolders),
                 },
@@ -2793,17 +2982,12 @@ export class ToolHandlers {
               claudeProjectsByPath.set(canonicalProjectPath, {
                 project_path: canonicalProjectPath,
                 source_type: "claude-code",
-                message_count: messageStats.count,
-                conversation_count: stats.count,
-                decision_count: decisionStats.count,
-                mistake_count: mistakeStats.count,
-                db_path: projectDbPath,
+                message_count: stats.messages.count,
+                conversation_count: stats.conversations.count,
+                decision_count: stats.decisions.count,
+                mistake_count: stats.mistakes.count,
                 indexed_folders: indexedFolders,
               });
-              } finally {
-                // Always close the project database to prevent handle leaks
-                projectDb.close();
-              }
             } catch (error) {
               errors.push({
                 project_path: folder,
@@ -2830,6 +3014,10 @@ export class ToolHandlers {
         totalConversations += project.conversation_count;
         totalDecisions += project.decision_count;
         totalMistakes += project.mistake_count;
+      }
+
+      if (shouldRebuildFts) {
+        storage.rebuildAllFts();
       }
 
       const stats = globalIndex.getGlobalStats();
@@ -2865,20 +3053,18 @@ export class ToolHandlers {
   ): Promise<Types.SearchAllConversationsResponse> {
     await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
-    const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const { getEmbeddingGenerator } = await import("../embeddings/EmbeddingGenerator.js");
     const typedArgs = args as unknown as Types.SearchAllConversationsArgs;
     const { query, limit = 20, offset = 0, date_range, source_type = "all" } = typedArgs;
 
-    const globalIndex = new GlobalIndex();
+    const globalIndex = new GlobalIndex(this.db);
 
     try {
       const projects = globalIndex.getAllProjects(
         source_type === "all" ? undefined : source_type
       );
 
-      // Pre-compute query embedding once for all projects (major optimization)
       let queryEmbedding: Float32Array | undefined;
       try {
         const embedder = await getEmbeddingGenerator();
@@ -2886,75 +3072,61 @@ export class ToolHandlers {
           queryEmbedding = await embedder.embed(query);
         }
       } catch (_embeddingError) {
-        // Fall back to FTS in each project
+        // Fall back to FTS
       }
 
+      const semanticSearch = new SemanticSearch(this.db);
+      const localResults = await semanticSearch.searchConversations(
+        query,
+        limit + offset + 50,
+        undefined,
+        queryEmbedding
+      );
+
+      const filteredResults = localResults.filter((r) => {
+        if (date_range) {
+          const timestamp = r.message.timestamp;
+          if (timestamp < date_range[0] || timestamp > date_range[1]) {
+            return false;
+          }
+        }
+        if (source_type !== "all") {
+          const resultSource = r.conversation.source_type || "claude-code";
+          return resultSource === source_type;
+        }
+        return true;
+      });
+
       const allResults: Types.GlobalSearchResult[] = [];
-      const failedProjects: string[] = [];
       let claudeCodeResults = 0;
       let codexResults = 0;
 
-      for (const project of projects) {
-        let projectDb: SQLiteManager | null = null;
-        try {
-          // Open this project's database
-          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
-          const semanticSearch = new SemanticSearch(projectDb);
+      for (const result of filteredResults) {
+        const source = (result.conversation.source_type || "claude-code") as "claude-code" | "codex";
+        allResults.push({
+          conversation_id: result.conversation.id,
+          message_id: result.message.id,
+          timestamp: new Date(result.message.timestamp).toISOString(),
+          similarity: result.similarity,
+          snippet: result.snippet,
+          git_branch: result.conversation.git_branch,
+          message_type: result.message.message_type,
+          role: result.message.role,
+          project_path: result.conversation.project_path,
+          source_type: source,
+        });
 
-          // Search using pre-computed embedding (avoids re-embedding per project)
-          const localResults = await semanticSearch.searchConversations(
-            query,
-            limit + offset,
-            undefined,
-            queryEmbedding
-          );
-
-          // Filter by date range if specified
-          const filteredResults = date_range
-            ? localResults.filter((r: { message: { timestamp: number } }) => {
-                const timestamp = r.message.timestamp;
-                return timestamp >= date_range[0] && timestamp <= date_range[1];
-              })
-            : localResults;
-
-          // Enrich results with project info
-          for (const result of filteredResults) {
-            allResults.push({
-              conversation_id: result.conversation.id,
-              message_id: result.message.id,
-              timestamp: new Date(result.message.timestamp).toISOString(),
-              similarity: result.similarity,
-              snippet: result.snippet,
-              git_branch: result.conversation.git_branch,
-              message_type: result.message.message_type,
-              role: result.message.role,
-              project_path: project.project_path,
-              source_type: project.source_type,
-            });
-
-            if (project.source_type === "claude-code") {
-              claudeCodeResults++;
-            } else {
-              codexResults++;
-            }
-          }
-        } catch (error) {
-          // Track failed projects instead of silently ignoring
-          failedProjects.push(`${project.project_path}: ${(error as Error).message}`);
-          continue;
-        } finally {
-          // Close project database
-          if (projectDb) {
-            projectDb.close();
-          }
+        if (source === "claude-code") {
+          claudeCodeResults++;
+        } else {
+          codexResults++;
         }
       }
 
-      // Sort by similarity and paginate
       const sortedResults = allResults.sort((a, b) => b.similarity - a.similarity);
       const paginatedResults = sortedResults.slice(offset, offset + limit);
 
-      const successfulProjects = projects.length - failedProjects.length;
+      const successfulProjects = projects.length;
       return {
         query,
         results: paginatedResults,
@@ -2963,14 +3135,12 @@ export class ToolHandlers {
         offset,
         projects_searched: projects.length,
         projects_succeeded: successfulProjects,
-        failed_projects: failedProjects.length > 0 ? failedProjects : undefined,
+        failed_projects: undefined,
         search_stats: {
           claude_code_results: claudeCodeResults,
           codex_results: codexResults,
         },
-        message: failedProjects.length > 0
-          ? `Found ${paginatedResults.length} result(s) across ${successfulProjects}/${projects.length} project(s). ${failedProjects.length} project(s) failed.`
-          : `Found ${paginatedResults.length} result(s) across ${projects.length} project(s)`,
+        message: `Found ${paginatedResults.length} result(s) across ${projects.length} project(s)`,
       };
     } finally {
       // Ensure GlobalIndex is always closed
@@ -2987,60 +3157,46 @@ export class ToolHandlers {
   async getAllDecisions(args: Record<string, unknown>): Promise<Types.GetAllDecisionsResponse> {
     await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
-    const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const typedArgs = args as unknown as Types.GetAllDecisionsArgs;
     const { query, file_path, limit = 20, offset = 0, source_type = 'all' } = typedArgs;
 
-    const globalIndex = new GlobalIndex();
+    const globalIndex = new GlobalIndex(this.db);
 
     try {
       const projects = globalIndex.getAllProjects(
         source_type === "all" ? undefined : source_type
       );
 
-      const allDecisions: Types.GlobalDecision[] = [];
+      const semanticSearch = new SemanticSearch(this.db);
+      const searchResults = await semanticSearch.searchDecisions(query, limit + offset + 50);
 
-      for (const project of projects) {
-        let projectDb: SQLiteManager | null = null;
-        try {
-          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
-          const semanticSearch = new SemanticSearch(projectDb);
-
-          // Use semantic search for better results
-          const searchResults = await semanticSearch.searchDecisions(query, limit + offset);
-
-          // Filter by file_path if specified
-          const filteredResults = file_path
-            ? searchResults.filter(r => r.decision.related_files.includes(file_path))
-            : searchResults;
-
-          for (const r of filteredResults) {
-            allDecisions.push({
-              decision_id: r.decision.id,
-              decision_text: r.decision.decision_text,
-              rationale: r.decision.rationale,
-              alternatives_considered: r.decision.alternatives_considered,
-              rejected_reasons: r.decision.rejected_reasons,
-              context: r.decision.context,
-              related_files: r.decision.related_files,
-              related_commits: r.decision.related_commits,
-              timestamp: new Date(r.decision.timestamp).toISOString(),
-              similarity: r.similarity,
-              project_path: project.project_path,
-              source_type: project.source_type,
-            });
-          }
-        } catch (_error) {
-          continue;
-        } finally {
-          if (projectDb) {
-            projectDb.close();
-          }
+      const filteredResults = searchResults.filter((r) => {
+        if (file_path && !r.decision.related_files.includes(file_path)) {
+          return false;
         }
-      }
+        if (source_type !== "all") {
+          const convSource = r.conversation.source_type || "claude-code";
+          return convSource === source_type;
+        }
+        return true;
+      });
 
-      // Sort by similarity (semantic relevance) and paginate
+      const allDecisions: Types.GlobalDecision[] = filteredResults.map((r) => ({
+        decision_id: r.decision.id,
+        decision_text: r.decision.decision_text,
+        rationale: r.decision.rationale,
+        alternatives_considered: r.decision.alternatives_considered,
+        rejected_reasons: r.decision.rejected_reasons,
+        context: r.decision.context,
+        related_files: r.decision.related_files,
+        related_commits: r.decision.related_commits,
+        timestamp: new Date(r.decision.timestamp).toISOString(),
+        similarity: r.similarity,
+        project_path: r.conversation.project_path,
+        source_type: (r.conversation.source_type || "claude-code") as "claude-code" | "codex",
+      }));
+
       const sortedDecisions = allDecisions.sort((a, b) => b.similarity - a.similarity);
       const paginatedDecisions = sortedDecisions.slice(offset, offset + limit);
 
@@ -3069,12 +3225,11 @@ export class ToolHandlers {
   ): Promise<Types.SearchAllMistakesResponse> {
     await this.maybeAutoIndex();
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
-    const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const typedArgs = args as unknown as Types.SearchAllMistakesArgs;
     const { query, mistake_type, limit = 20, offset = 0, source_type = 'all' } = typedArgs;
 
-    const globalIndex = new GlobalIndex();
+    const globalIndex = new GlobalIndex(this.db);
 
     try {
       const projects = globalIndex.getAllProjects(
@@ -3085,44 +3240,32 @@ export class ToolHandlers {
         similarity: number;
       }
 
-      const allMistakes: GlobalMistakeWithSimilarity[] = [];
+      const semanticSearch = new SemanticSearch(this.db);
+      const searchResults = await semanticSearch.searchMistakes(query, limit + offset + 50);
 
-      for (const project of projects) {
-        let projectDb: SQLiteManager | null = null;
-        try {
-          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
-          const semanticSearch = new SemanticSearch(projectDb);
-
-          // Use semantic search for better results
-          const searchResults = await semanticSearch.searchMistakes(query, limit + offset);
-
-          // Filter by mistake_type if specified
-          const filteredResults = mistake_type
-            ? searchResults.filter(r => r.mistake.mistake_type === mistake_type)
-            : searchResults;
-
-          for (const r of filteredResults) {
-            allMistakes.push({
-              mistake_id: r.mistake.id,
-              mistake_type: r.mistake.mistake_type,
-              what_went_wrong: r.mistake.what_went_wrong,
-              correction: r.mistake.correction,
-              user_correction_message: r.mistake.user_correction_message,
-              files_affected: r.mistake.files_affected,
-              timestamp: new Date(r.mistake.timestamp).toISOString(),
-              project_path: project.project_path,
-              source_type: project.source_type,
-              similarity: r.similarity,
-            });
-          }
-        } catch (_error) {
-          continue;
-        } finally {
-          if (projectDb) {
-            projectDb.close();
-          }
+      const filteredResults = searchResults.filter((r) => {
+        if (mistake_type && r.mistake.mistake_type !== mistake_type) {
+          return false;
         }
-      }
+        if (source_type !== "all") {
+          const convSource = r.conversation.source_type || "claude-code";
+          return convSource === source_type;
+        }
+        return true;
+      });
+
+      const allMistakes: GlobalMistakeWithSimilarity[] = filteredResults.map((r) => ({
+        mistake_id: r.mistake.id,
+        mistake_type: r.mistake.mistake_type,
+        what_went_wrong: r.mistake.what_went_wrong,
+        correction: r.mistake.correction,
+        user_correction_message: r.mistake.user_correction_message,
+        files_affected: r.mistake.files_affected,
+        timestamp: new Date(r.mistake.timestamp).toISOString(),
+        project_path: r.conversation.project_path,
+        source_type: (r.conversation.source_type || "claude-code") as "claude-code" | "codex",
+        similarity: r.similarity,
+      }));
 
       // Sort by similarity (semantic relevance) and paginate
       const sortedMistakes = allMistakes.sort((a, b) => b.similarity - a.similarity);

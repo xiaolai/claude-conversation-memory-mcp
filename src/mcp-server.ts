@@ -60,6 +60,7 @@ export class ConversationMemoryServer {
     return {
       index_conversations: (args) => this.handlers.indexConversations(args),
       search_conversations: (args) => this.handlers.searchConversations(args),
+      search_project_conversations: (args) => this.handlers.searchProjectConversations(args),
       get_decisions: (args) => this.handlers.getDecisions(args),
       check_before_modify: (args) => this.handlers.checkBeforeModify(args),
       get_file_evolution: (args) => this.handlers.getFileEvolution(args),
@@ -75,6 +76,7 @@ export class ConversationMemoryServer {
       forget_by_topic: (args) => this.handlers.forgetByTopic(args),
       search_by_file: (args) => this.handlers.searchByFile(args),
       list_recent_sessions: (args) => this.handlers.listRecentSessions(args),
+      get_latest_session_summary: (args) => this.handlers.getLatestSessionSummary(args),
       index_all_projects: (args) => this.handlers.indexAllProjects(args),
       search_all_conversations: (args) => this.handlers.searchAllConversations(args),
       get_all_decisions: (args) => this.handlers.getAllDecisions(args),

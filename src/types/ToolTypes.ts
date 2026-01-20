@@ -23,6 +23,16 @@ export interface SearchConversationsArgs {
   conversation_id?: string; // For scope='current'
 }
 
+export interface SearchProjectConversationsArgs {
+  query: string;
+  project_path?: string;
+  limit?: number;
+  offset?: number;
+  date_range?: [number, number];
+  include_claude_code?: boolean;
+  include_codex?: boolean;
+}
+
 export interface GetDecisionsArgs {
   query: string;
   file_path?: string;
@@ -130,6 +140,22 @@ export interface SearchConversationsResponse {
   has_more: boolean;
   offset: number;
   scope: 'current' | 'all' | 'global';
+}
+
+export interface SearchProjectResult extends SearchResult {
+  project_path: string;
+  source_type: 'claude-code' | 'codex';
+}
+
+export interface SearchProjectConversationsResponse {
+  query: string;
+  project_path: string;
+  results: SearchProjectResult[];
+  total_found: number;
+  has_more: boolean;
+  offset: number;
+  include_claude_code: boolean;
+  include_codex: boolean;
 }
 
 export interface DecisionResult {
@@ -386,8 +412,11 @@ export interface GenerateDocumentationResponse {
 // ==================== Database Row Types ====================
 
 export interface ConversationRow {
-  id: string;
+  id: number;
+  project_id: number;
   project_path: string;
+  source_type: string;
+  external_id: string;
   first_message_at: number;
   last_message_at: number;
   message_count: number;
@@ -399,9 +428,11 @@ export interface ConversationRow {
 }
 
 export interface MessageRow {
-  id: string;
-  conversation_id: string;
-  parent_id?: string;
+  id: number;
+  conversation_id: number;
+  external_id: string;
+  parent_message_id?: number | null;
+  parent_external_id?: string | null;
   message_type: string;
   role?: string;
   content?: string;
@@ -415,9 +446,10 @@ export interface MessageRow {
 }
 
 export interface DecisionRow {
-  id: string;
-  conversation_id: string;
-  message_id: string;
+  id: number;
+  external_id: string;
+  conversation_id: number;
+  message_id: number;
   decision_text: string;
   rationale?: string;
   alternatives_considered: string;
@@ -429,9 +461,10 @@ export interface DecisionRow {
 }
 
 export interface MistakeRow {
-  id: string;
-  conversation_id: string;
-  message_id: string;
+  id: number;
+  external_id: string;
+  conversation_id: number;
+  message_id: number;
   mistake_type: string;
   what_went_wrong: string;
   correction?: string;
@@ -441,14 +474,16 @@ export interface MistakeRow {
 }
 
 export interface GitCommitRow {
+  id: number;
+  project_id: number;
   hash: string;
   message: string;
   author?: string;
   timestamp: number;
   branch?: string;
   files_changed: string;
-  conversation_id?: string;
-  related_message_id?: string;
+  conversation_id?: number | null;
+  related_message_id?: number | null;
   metadata: string;
 }
 
@@ -598,6 +633,44 @@ export interface ListRecentSessionsResponse {
   }>;
   total_sessions: number;
   has_more: boolean;
+  message: string;
+}
+
+export interface GetLatestSessionSummaryArgs {
+  project_path?: string;
+  source_type?: 'claude-code' | 'codex' | 'all';
+  limit_messages?: number;
+  include_tools?: boolean;
+  include_errors?: boolean;
+}
+
+export interface GetLatestSessionSummaryResponse {
+  success: boolean;
+  found: boolean;
+  session?: {
+    id: string;
+    session_id: string;
+    project_path: string;
+    source_type: 'claude-code' | 'codex';
+    created_at: number;
+    last_message_at: number;
+    message_count: number;
+  };
+  summary?: {
+    problem_statement?: string;
+    recent_user_messages: Array<{ timestamp: number; content: string }>;
+    recent_assistant_messages: Array<{ timestamp: number; content: string }>;
+    recent_actions?: Array<{
+      tool_name: string;
+      timestamp: number;
+      tool_input: Record<string, unknown>;
+    }>;
+    errors?: Array<{
+      tool_name: string;
+      timestamp: number;
+      message: string;
+    }>;
+  };
   message: string;
 }
 

@@ -165,23 +165,30 @@ Open Codex and run `/mcp` in the TUI to verify the server is active.
 
 ### Storage Paths
 
-By default, CCCMemory stores per-project databases in:
+By default, CCCMemory uses a **single database**:
+
+- `~/.cccmemory.db`
+
+If you want per-project isolation, set:
+
+```bash
+export CCCMEMORY_DB_MODE="per-project"
+```
+
+In per-project mode, CCCMemory stores:
 
 - `~/.claude/projects/<project>/.cccmemory.db`
-- Global index: `~/.claude/.cccmemory-global.db`
+- Fallback (restricted sandboxes): `<project>/.cccmemory/.cccmemory.db`
 
 If your home directory is not writable (common in sandboxed Codex/Claude setups where
-`~/.claude` and `~/.codex` are locked), the server will exit with a clear error.
-Set explicit paths to a writable location:
+`~/.claude` and `~/.codex` are locked), set an explicit writable path:
 
 ```bash
 export CCCMEMORY_DB_PATH="/path/to/cccmemory.db"
-export CCCMEMORY_GLOBAL_INDEX_PATH="/path/to/cccmemory-global.db"
 ```
 
-For MCP configs, add these env vars in your server definition. CCCMemory will not
-silently create new databases outside `~/.claude`; it only uses an existing
-project-local DB if one already exists and logs a warning.
+For MCP configs, add these env vars in your server definition. CCCMemory stores the
+global project registry **inside the same database** (projects + project_sources tables).
 
 ### Embedding Configuration (Optional)
 
@@ -254,6 +261,7 @@ Set `OPENAI_API_KEY` environment variable.
 | Tool | Description |
 |------|-------------|
 | `search_conversations` | Search messages in current project |
+| `search_project_conversations` | Search a project across Claude Code + Codex |
 | `search_all_conversations` | Search across all indexed projects |
 | `get_decisions` | Find architectural decisions |
 | `get_all_decisions` | Decisions across all projects |
@@ -268,6 +276,7 @@ Set `OPENAI_API_KEY` environment variable.
 | `get_file_evolution` | See file history with commits |
 | `search_by_file` | Find all context related to a file |
 | `list_recent_sessions` | List recent sessions with summaries |
+| `get_latest_session_summary` | Summarize the latest session (problem, actions, errors) |
 | `recall_and_apply` | Recall past work for current task |
 | `get_requirements` | Look up component requirements |
 | `get_tool_history` | Query tool usage history |
@@ -280,6 +289,15 @@ Set `OPENAI_API_KEY` environment variable.
 | `migrate_project` | Migrate/merge conversation history |
 | `forget_by_topic` | Delete conversations by keyword |
 | `generate_documentation` | Generate docs from conversations |
+
+### Session IDs
+
+`list_recent_sessions` returns **two identifiers**:
+
+- `id`: internal conversation id (use for `scope="current"` filters, handoffs, and documentation filters)
+- `session_id`: external session id (Claude JSONL filename / Codex rollout id). Use for `index_conversations` and CLI `index --session`.
+
+`index_conversations` accepts either, but external `session_id` is preferred.
 
 ## CLI Usage
 
@@ -310,14 +328,15 @@ CCCMemory indexes local session history from stable, parseable on-disk formats. 
 ## Architecture
 
 ```
-Per-Project Databases (isolation)
-├── ~/.claude/projects/{project}/.cccmemory.db (Claude Code default)
-├── ~/.codex/.cccmemory.db (Codex default)
-└── {project}/.cccmemory/.cccmemory.db (fallback in restricted sandboxes)
+Single Database (default)
+└── ~/.cccmemory.db
+    ├── projects + project_aliases
+    ├── project_sources (global index)
+    └── conversations/messages/decisions/mistakes/...
 
-Global Registry (cross-project search)
-├── ~/.claude/.cccmemory-global.db (default)
-└── {project}/.cccmemory/global-index.db (fallback in restricted sandboxes)
+Per-Project Databases (optional)
+└── ~/.claude/projects/{project}/.cccmemory.db
+    └── {project}/.cccmemory/.cccmemory.db (sandbox fallback)
 ```
 
 ## Troubleshooting

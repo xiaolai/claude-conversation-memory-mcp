@@ -2,17 +2,22 @@
  * Unit tests for ToolHandlers
  */
 
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { ToolHandlers } from '../../tools/ToolHandlers.js';
 import { ConversationMemory } from '../../ConversationMemory.js';
 import { getSQLiteManager, resetSQLiteManager } from '../../storage/SQLiteManager.js';
+import { ConversationStorage } from '../../storage/ConversationStorage.js';
 
 describe('ToolHandlers', () => {
   let handlers: ToolHandlers;
   let memory: ConversationMemory;
+  let db: ReturnType<typeof getSQLiteManager>;
 
   beforeEach(() => {
     memory = new ConversationMemory();
-    const db = getSQLiteManager({ dbPath: ':memory:' });
+    db = getSQLiteManager({ dbPath: ':memory:' });
     handlers = new ToolHandlers(memory, db);
   });
 
@@ -138,6 +143,104 @@ describe('ToolHandlers', () => {
 
       const commitEvents = result.timeline.filter(e => e.type === 'commit');
       expect(commitEvents.length).toBe(0);
+    });
+  });
+
+  describe('listRecentSessions', () => {
+    it('returns external session ids for session_id', async () => {
+      const storage = new ConversationStorage(db);
+      const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cccmemory-test-'));
+      const now = Date.now();
+
+      await storage.storeConversations([
+        {
+          id: 'session-external-123',
+          project_path: projectPath,
+          source_type: 'claude-code',
+          first_message_at: now,
+          last_message_at: now,
+          message_count: 1,
+          metadata: {},
+          created_at: now,
+          updated_at: now,
+        },
+      ]);
+
+      const result = await handlers.listRecentSessions({ project_path: projectPath });
+
+      expect(result.sessions.length).toBeGreaterThan(0);
+      expect(result.sessions[0].session_id).toBe('session-external-123');
+    });
+  });
+
+  describe('getLatestSessionSummary', () => {
+    it('summarizes the latest session with recent user message', async () => {
+      const storage = new ConversationStorage(db);
+      const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cccmemory-test-'));
+      const now = Date.now();
+
+      const conversationIdMap = await storage.storeConversations([
+        {
+          id: 'session-latest',
+          project_path: projectPath,
+          source_type: 'claude-code',
+          first_message_at: now - 1000,
+          last_message_at: now,
+          message_count: 3,
+          metadata: {},
+          created_at: now - 1000,
+          updated_at: now,
+        },
+      ]);
+
+      await storage.storeMessages(
+        [
+          {
+            id: 'msg-1',
+            conversation_id: 'session-latest',
+            message_type: 'user',
+            role: 'user',
+            content: 'initial question',
+            timestamp: now - 900,
+            is_sidechain: false,
+            metadata: {},
+          },
+          {
+            id: 'msg-2',
+            conversation_id: 'session-latest',
+            message_type: 'assistant',
+            role: 'assistant',
+            content: 'assistant reply',
+            timestamp: now - 800,
+            is_sidechain: false,
+            metadata: {},
+          },
+          {
+            id: 'msg-3',
+            conversation_id: 'session-latest',
+            message_type: 'user',
+            role: 'user',
+            content: 'latest issue to solve',
+            timestamp: now - 100,
+            is_sidechain: false,
+            metadata: {},
+          },
+        ],
+        { skipFtsRebuild: true, conversationIdMap }
+      );
+
+      const result = await handlers.getLatestSessionSummary({
+        project_path: projectPath,
+        source_type: 'claude-code',
+        limit_messages: 5,
+        include_tools: false,
+        include_errors: false,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.found).toBe(true);
+      expect(result.session?.session_id).toBe('session-latest');
+      expect(result.summary?.problem_statement).toContain('latest issue to solve');
     });
   });
 
