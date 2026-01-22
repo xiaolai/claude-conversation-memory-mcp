@@ -18,12 +18,18 @@ import { ToolHandlers } from "./tools/ToolHandlers.js";
 import { TOOLS } from "./tools/ToolDefinitions.js";
 import { getSQLiteManager } from "./storage/SQLiteManager.js";
 
-// Read version from package.json
+// Read version from package.json with fallback
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageJsonPath = join(__dirname, "..", "package.json");
-const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version: string };
-const VERSION = packageJson.version;
+
+let VERSION = "0.0.0";
+try {
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: string };
+  VERSION = packageJson.version ?? "0.0.0";
+} catch (err) {
+  console.error(`[MCP] Warning: Could not read package.json version: ${(err as Error).message}`);
+}
 
 /**
  * Main MCP Server
@@ -94,7 +100,59 @@ export class ConversationMemoryServer {
       // Live Context Layer: Context Injection
       get_startup_context: (args) => this.handlers.getStartupContext(args),
       inject_relevant_context: (args) => this.handlers.injectRelevantContext(args),
+      // Phase 1: Tag Management
+      list_tags: (args) => this.handlers.listTags(args),
+      search_by_tags: (args) => this.handlers.searchByTags(args),
+      rename_tag: (args) => this.handlers.renameTag(args),
+      merge_tags: (args) => this.handlers.mergeTags(args),
+      delete_tag: (args) => this.handlers.deleteTag(args),
+      tag_item: (args) => this.handlers.tagItem(args),
+      untag_item: (args) => this.handlers.untagItem(args),
+      // Phase 1: Memory Confidence
+      set_memory_confidence: (args) => this.handlers.setMemoryConfidence(args),
+      set_memory_importance: (args) => this.handlers.setMemoryImportance(args),
+      pin_memory: (args) => this.handlers.pinMemory(args),
+      archive_memory: (args) => this.handlers.archiveMemory(args),
+      unarchive_memory: (args) => this.handlers.unarchiveMemory(args),
+      search_memory_by_quality: (args) => this.handlers.searchMemoryByQuality(args),
+      get_memory_stats: (args) => this.handlers.getMemoryStats(args),
+      // Phase 1: Cleanup/Maintenance
+      get_storage_stats: (args) => this.handlers.getStorageStats(args),
+      find_stale_items: (args) => this.handlers.findStaleItems(args),
+      find_duplicates: (args) => this.handlers.findDuplicates(args),
+      merge_duplicates: (args) => this.handlers.mergeDuplicates(args),
+      cleanup_stale: (args) => this.handlers.cleanupStale(args),
+      vacuum_database: (args) => this.handlers.vacuumDatabase(args),
+      cleanup_orphans: (args) => this.handlers.cleanupOrphans(args),
+      get_health_report: (args) => this.handlers.getHealthReport(args),
+      run_maintenance: (args) => this.handlers.runMaintenance(args),
+      get_maintenance_history: (args) => this.handlers.getMaintenanceHistory(args),
     };
+  }
+
+  /**
+   * Validate that tool definitions match handler implementations
+   * Fails fast at startup if there's a drift between TOOLS and handlers
+   */
+  private validateToolHandlers(toolHandlers: Record<string, unknown>): void {
+    const definedTools = new Set(Object.keys(TOOLS));
+    const implementedTools = new Set(Object.keys(toolHandlers));
+
+    // Find tools defined but not implemented
+    const missingHandlers = [...definedTools].filter(t => !implementedTools.has(t));
+    if (missingHandlers.length > 0) {
+      throw new Error(
+        `Tool definition/handler drift: Tools defined but not implemented: ${missingHandlers.join(', ')}`
+      );
+    }
+
+    // Find handlers without tool definitions
+    const extraHandlers = [...implementedTools].filter(t => !definedTools.has(t));
+    if (extraHandlers.length > 0) {
+      throw new Error(
+        `Tool definition/handler drift: Handlers without tool definitions: ${extraHandlers.join(', ')}`
+      );
+    }
   }
 
   /**
@@ -102,6 +160,9 @@ export class ConversationMemoryServer {
    */
   private setupHandlers() {
     const toolHandlers = this.getToolHandlerMap();
+
+    // Validate tool definitions match handlers at startup
+    this.validateToolHandlers(toolHandlers);
 
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -112,27 +173,44 @@ export class ConversationMemoryServer {
 
     // Handle tool execution
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      // Ensure args is always an object, defaulting to empty
-      const argsObj = (args ?? {}) as Record<string, unknown>;
+      // Track tool name for error reporting (may be undefined if params is malformed)
+      let toolName: string | undefined;
 
       try {
-        console.error(`[MCP] Executing tool: ${name}`);
-
-        // Guard against prototype pollution: only allow own properties
-        if (!Object.hasOwn(toolHandlers, name)) {
+        // Validate and extract params inside try block to catch malformed requests
+        const params = request.params;
+        if (!params || typeof params.name !== "string") {
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify({ error: `Unknown tool: ${name}` }),
+                text: JSON.stringify({ error: "Invalid request: missing or invalid tool name" }),
               },
             ],
             isError: true,
           };
         }
 
-        const handler = toolHandlers[name];
+        toolName = params.name;
+        // Ensure args is always an object, defaulting to empty
+        const argsObj = (params.arguments ?? {}) as Record<string, unknown>;
+
+        console.error(`[MCP] Executing tool: ${toolName}`);
+
+        // Guard against prototype pollution: only allow own properties
+        if (!Object.hasOwn(toolHandlers, toolName)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ error: `Unknown tool: ${toolName}` }),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const handler = toolHandlers[toolName];
         const result = await handler(argsObj);
 
         // Use compact JSON for responses (no pretty-printing)
@@ -148,7 +226,7 @@ export class ConversationMemoryServer {
         // Safely handle non-Error throws
         const err = error instanceof Error ? error : new Error(String(error));
         // Log full error details server-side only
-        console.error(`[MCP] Error executing tool ${name}:`, err.message);
+        console.error(`[MCP] Error executing tool ${toolName ?? "unknown"}:`, err.message);
         if (err.stack) {
           console.error(`[MCP] Stack trace:`, err.stack);
         }

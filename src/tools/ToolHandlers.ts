@@ -60,6 +60,119 @@ import { safeJsonParse } from "../utils/safeJson.js";
  */
 
 /**
+ * Helper interface for embedding indexing parameters.
+ */
+interface EmbeddingIndexParams {
+  messages: Array<{ id: string; content?: string }>;
+  decisions: Array<{
+    id: string;
+    decision_text: string;
+    rationale?: string;
+    context?: string | null;
+  }>;
+  mistakes: Array<{
+    id: string;
+    what_went_wrong: string;
+    correction?: string | null;
+    mistake_type: string;
+  }>;
+  messageIdMap: Map<string, number>;
+  decisionIdMap: Map<string, number>;
+  mistakeIdMap: Map<string, number>;
+  semanticSearch: {
+    indexMessages: (msgs: Array<{ id: number; content: string }>, incremental: boolean) => Promise<void>;
+    indexDecisions: (decs: Array<{ id: number; decision_text: string; rationale?: string; context?: string | null }>, incremental: boolean) => Promise<void>;
+    indexMistakes: (msts: Array<{ id: number; what_went_wrong: string; correction?: string | null; mistake_type: string }>, incremental: boolean) => Promise<void>;
+    indexMissingDecisionEmbeddings: () => Promise<number>;
+    indexMissingMistakeEmbeddings: () => Promise<number>;
+  };
+  incremental: boolean;
+  logLabel: string;
+}
+
+/**
+ * Generate embeddings for messages, decisions, and mistakes.
+ * Shared helper to avoid code duplication in indexAllProjects.
+ */
+async function generateEmbeddingsForIndexing(params: EmbeddingIndexParams): Promise<void> {
+  const {
+    messages,
+    decisions,
+    mistakes,
+    messageIdMap,
+    decisionIdMap,
+    mistakeIdMap,
+    semanticSearch,
+    incremental,
+    logLabel,
+  } = params;
+
+  try {
+    // Map messages to internal IDs
+    const messagesForEmbedding = messages
+      .map((message) => {
+        const internalId = messageIdMap.get(message.id);
+        if (!internalId || !message.content) {
+          return null;
+        }
+        return { id: internalId, content: message.content };
+      })
+      .filter((message): message is { id: number; content: string } => Boolean(message));
+
+    // Map decisions to internal IDs
+    const decisionsForEmbedding: Array<{
+      id: number;
+      decision_text: string;
+      rationale?: string;
+      context?: string | null;
+    }> = [];
+    for (const decision of decisions) {
+      const internalId = decisionIdMap.get(decision.id);
+      if (!internalId) {
+        continue;
+      }
+      decisionsForEmbedding.push({
+        id: internalId,
+        decision_text: decision.decision_text,
+        rationale: decision.rationale,
+        context: decision.context ?? null,
+      });
+    }
+
+    // Map mistakes to internal IDs
+    const mistakesForEmbedding: Array<{
+      id: number;
+      what_went_wrong: string;
+      correction?: string | null;
+      mistake_type: string;
+    }> = [];
+    for (const mistake of mistakes) {
+      const internalId = mistakeIdMap.get(mistake.id);
+      if (!internalId) {
+        continue;
+      }
+      mistakesForEmbedding.push({
+        id: internalId,
+        what_went_wrong: mistake.what_went_wrong,
+        correction: mistake.correction ?? null,
+        mistake_type: mistake.mistake_type,
+      });
+    }
+
+    // Index all items
+    await semanticSearch.indexMessages(messagesForEmbedding, incremental);
+    await semanticSearch.indexDecisions(decisionsForEmbedding, incremental);
+    await semanticSearch.indexMistakes(mistakesForEmbedding, incremental);
+    await semanticSearch.indexMissingDecisionEmbeddings();
+    await semanticSearch.indexMissingMistakeEmbeddings();
+    console.error(`✓ Generated embeddings for ${logLabel}`);
+  } catch (embedError) {
+    console.error(`⚠️ Embedding generation failed for ${logLabel}:`, (embedError as Error).message);
+    console.error("   FTS fallback will be used for search");
+  }
+}
+
+/**
  * Tool handlers for the cccmemory MCP server.
  *
  * Provides methods for indexing, searching, and managing conversation history.
@@ -377,12 +490,23 @@ export class ToolHandlers {
         throw new Error("conversation_id is required when scope='current'");
       }
 
+      // Look up external_id from internal conversation_id for consistent filtering
+      // conversation_id is documented as "internal conversation id from list_recent_sessions.id"
+      const convRow = this.db.prepare(
+        "SELECT external_id FROM conversations WHERE id = ?"
+      ).get(conversation_id) as { external_id: string } | undefined;
+
+      if (!convRow) {
+        throw new Error(`Conversation with id '${conversation_id}' not found`);
+      }
+      const targetExternalId = convRow.external_id;
+
       // Overfetch to account for post-query filtering (conversation_id, date_range)
       // Use 4x multiplier to ensure we have enough results after filtering
       const overfetchMultiplier = 4;
       const fetchLimit = (limit + offset) * overfetchMultiplier;
       const results = await this.memory.search(query, fetchLimit);
-      const filteredResults = results.filter(r => r.conversation.id === conversation_id);
+      const filteredResults = results.filter(r => r.conversation.id === targetExternalId);
 
       const dateFilteredResults = date_range
         ? filteredResults.filter(r => {
@@ -643,7 +767,16 @@ export class ToolHandlers {
       if (!conversation_id) {
         throw new Error("conversation_id is required when scope='current'");
       }
-      filteredResults = filteredResults.filter((r) => r.decision.conversation_id === conversation_id);
+      // Look up external_id from internal conversation_id for consistent filtering
+      const convRow = this.db.prepare(
+        "SELECT external_id FROM conversations WHERE id = ?"
+      ).get(conversation_id) as { external_id: string } | undefined;
+
+      if (!convRow) {
+        throw new Error(`Conversation with id '${conversation_id}' not found`);
+      }
+      const targetExternalId = convRow.external_id;
+      filteredResults = filteredResults.filter((r) => r.decision.conversation_id === targetExternalId);
     }
 
     const paginatedResults = filteredResults.slice(offset, offset + limit);
@@ -899,12 +1032,20 @@ export class ToolHandlers {
       if (!targetId) {
         throw new Error("conversation_id is required when scope='current'");
       }
+      // Look up external_id from internal conversation_id for consistent filtering
+      const convRow = this.db.prepare(
+        "SELECT external_id FROM conversations WHERE id = ?"
+      ).get(targetId) as { external_id: string } | undefined;
+
+      if (!convRow) {
+        throw new Error(`Conversation with id '${targetId}' not found`);
+      }
       sql += " AND c.external_id = ?";
-      params.push(targetId);
+      params.push(convRow.external_id);
     }
 
     if (query) {
-      sql += " AND message LIKE ?";
+      sql += " AND message LIKE ? ESCAPE '\\'";
       params.push(`%${sanitizeForLike(query)}%`);
     }
 
@@ -1020,7 +1161,16 @@ export class ToolHandlers {
         if (!conversation_id) {
           throw new Error("conversation_id is required when scope='current'");
         }
-        filtered = filtered.filter(r => r.mistake.conversation_id === conversation_id);
+        // Look up external_id from internal conversation_id for consistent filtering
+        const convRow = this.db.prepare(
+          "SELECT external_id FROM conversations WHERE id = ?"
+        ).get(conversation_id) as { external_id: string } | undefined;
+
+        if (!convRow) {
+          throw new Error(`Conversation with id '${conversation_id}' not found`);
+        }
+        const targetExternalId = convRow.external_id;
+        filtered = filtered.filter(r => r.mistake.conversation_id === targetExternalId);
       }
 
       // Apply pagination
@@ -1073,8 +1223,16 @@ export class ToolHandlers {
       if (!conversation_id) {
         throw new Error("conversation_id is required when scope='current'");
       }
+      // Look up external_id from internal conversation_id for consistent filtering
+      const convRow = this.db.prepare(
+        "SELECT external_id FROM conversations WHERE id = ?"
+      ).get(conversation_id) as { external_id: string } | undefined;
+
+      if (!convRow) {
+        throw new Error(`Conversation with id '${conversation_id}' not found`);
+      }
       sql += " AND c.external_id = ?";
-      params.push(conversation_id);
+      params.push(convRow.external_id);
     }
 
     sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
@@ -1628,7 +1786,7 @@ export class ToolHandlers {
         .prepare(`
           SELECT hash, message, timestamp, files_changed
           FROM git_commits
-          WHERE message LIKE ? ${file_path ? 'AND files_changed LIKE ?' : ''}
+          WHERE message LIKE ? ESCAPE '\\' ${file_path ? "AND files_changed LIKE ? ESCAPE '\\'" : ''}
           ${date_range ? 'AND timestamp BETWEEN ? AND ?' : ''}
           ORDER BY timestamp DESC
           LIMIT ?
@@ -2161,7 +2319,7 @@ export class ToolHandlers {
       const messagesQuery = `
         SELECT id, conversation_id, content, timestamp, role
         FROM messages
-        WHERE content LIKE ? OR content LIKE ?
+        WHERE content LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
         ORDER BY timestamp DESC
         LIMIT ?
       `;
@@ -2180,9 +2338,9 @@ export class ToolHandlers {
       const decisionsQuery = `
         SELECT d.id, d.decision_text, d.rationale, d.context, d.timestamp
         FROM decisions d
-        WHERE d.related_files LIKE ?
-           OR d.related_files LIKE ?
-           OR d.decision_text LIKE ?
+        WHERE d.related_files LIKE ? ESCAPE '\\'
+           OR d.related_files LIKE ? ESCAPE '\\'
+           OR d.decision_text LIKE ? ESCAPE '\\'
         ORDER BY d.timestamp DESC
         LIMIT ?
       `;
@@ -2201,9 +2359,9 @@ export class ToolHandlers {
       const mistakesQuery = `
         SELECT m.id, m.mistake_type, m.what_went_wrong, m.correction, m.timestamp
         FROM mistakes m
-        WHERE m.files_affected LIKE ?
-           OR m.files_affected LIKE ?
-           OR m.what_went_wrong LIKE ?
+        WHERE m.files_affected LIKE ? ESCAPE '\\'
+           OR m.files_affected LIKE ? ESCAPE '\\'
+           OR m.what_went_wrong LIKE ? ESCAPE '\\'
         ORDER BY m.timestamp DESC
         LIMIT ?
       `;
@@ -2681,65 +2839,17 @@ export class ToolHandlers {
             await storage.storeValidations(validations, conversationIdMap);
 
             // Generate embeddings for semantic search
-            try {
-              const messagesForEmbedding = parseResult.messages
-                .map((message) => {
-                  const internalId = messageIdMap.get(message.id);
-                  if (!internalId || !message.content) {
-                    return null;
-                  }
-                  return { id: internalId, content: message.content };
-                })
-                .filter((message): message is { id: number; content: string } => Boolean(message));
-
-              const decisionsForEmbedding: Array<{
-                id: number;
-                decision_text: string;
-                rationale?: string;
-                context?: string | null;
-              }> = [];
-              for (const decision of decisions) {
-                const internalId = decisionIdMap.get(decision.id);
-                if (!internalId) {
-                  continue;
-                }
-                decisionsForEmbedding.push({
-                  id: internalId,
-                  decision_text: decision.decision_text,
-                  rationale: decision.rationale,
-                  context: decision.context ?? null,
-                });
-              }
-
-              const mistakesForEmbedding: Array<{
-                id: number;
-                what_went_wrong: string;
-                correction?: string | null;
-                mistake_type: string;
-              }> = [];
-              for (const mistake of mistakes) {
-                const internalId = mistakeIdMap.get(mistake.id);
-                if (!internalId) {
-                  continue;
-                }
-                mistakesForEmbedding.push({
-                  id: internalId,
-                  what_went_wrong: mistake.what_went_wrong,
-                  correction: mistake.correction ?? null,
-                  mistake_type: mistake.mistake_type,
-                });
-              }
-
-              await semanticSearch.indexMessages(messagesForEmbedding, incremental);
-              await semanticSearch.indexDecisions(decisionsForEmbedding, incremental);
-              await semanticSearch.indexMistakes(mistakesForEmbedding, incremental);
-              await semanticSearch.indexMissingDecisionEmbeddings();
-              await semanticSearch.indexMissingMistakeEmbeddings();
-              console.error("✓ Generated embeddings for Codex sessions");
-            } catch (embedError) {
-              console.error("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
-              console.error("   FTS fallback will be used for search");
-            }
+            await generateEmbeddingsForIndexing({
+              messages: parseResult.messages,
+              decisions,
+              mistakes,
+              messageIdMap,
+              decisionIdMap,
+              mistakeIdMap,
+              semanticSearch,
+              incremental,
+              logLabel: "Codex sessions",
+            });
           }
 
           const codexProjectPaths = new Set(parseResult.conversations.map((conv) => conv.project_path));
@@ -2884,65 +2994,17 @@ export class ToolHandlers {
               await storage.storeValidations(validations, conversationIdMap);
 
               // Generate embeddings for semantic search
-              try {
-                const messagesForEmbedding = parseResult.messages
-                  .map((message) => {
-                    const internalId = messageIdMap.get(message.id);
-                    if (!internalId || !message.content) {
-                      return null;
-                    }
-                    return { id: internalId, content: message.content };
-                  })
-                  .filter((message): message is { id: number; content: string } => Boolean(message));
-
-                const decisionsForEmbedding: Array<{
-                  id: number;
-                  decision_text: string;
-                  rationale?: string;
-                  context?: string | null;
-                }> = [];
-                for (const decision of decisions) {
-                  const internalId = decisionIdMap.get(decision.id);
-                  if (!internalId) {
-                    continue;
-                  }
-                  decisionsForEmbedding.push({
-                    id: internalId,
-                    decision_text: decision.decision_text,
-                    rationale: decision.rationale,
-                    context: decision.context ?? null,
-                  });
-                }
-
-                const mistakesForEmbedding: Array<{
-                  id: number;
-                  what_went_wrong: string;
-                  correction?: string | null;
-                  mistake_type: string;
-                }> = [];
-                for (const mistake of mistakes) {
-                  const internalId = mistakeIdMap.get(mistake.id);
-                  if (!internalId) {
-                    continue;
-                  }
-                  mistakesForEmbedding.push({
-                    id: internalId,
-                    what_went_wrong: mistake.what_went_wrong,
-                    correction: mistake.correction ?? null,
-                    mistake_type: mistake.mistake_type,
-                  });
-                }
-
-                await semanticSearch.indexMessages(messagesForEmbedding, incremental);
-                await semanticSearch.indexDecisions(decisionsForEmbedding, incremental);
-                await semanticSearch.indexMistakes(mistakesForEmbedding, incremental);
-                await semanticSearch.indexMissingDecisionEmbeddings();
-                await semanticSearch.indexMissingMistakeEmbeddings();
-                console.error(`✓ Generated embeddings for project: ${canonicalProjectPath}`);
-              } catch (embedError) {
-                console.error(`⚠️ Embedding generation failed for ${canonicalProjectPath}:`, (embedError as Error).message);
-                console.error("   FTS fallback will be used for search");
-              }
+              await generateEmbeddingsForIndexing({
+                messages: parseResult.messages,
+                decisions,
+                mistakes,
+                messageIdMap,
+                decisionIdMap,
+                mistakeIdMap,
+                semanticSearch,
+                incremental,
+                logLabel: `project: ${canonicalProjectPath}`,
+              });
 
               const existingAggregate = claudeProjectsByPath.get(canonicalProjectPath);
               const indexedFolders = existingAggregate
@@ -3874,6 +3936,2154 @@ export class ToolHandlers {
         sources_used: [],
         token_count: 0,
         message: `Error injecting context: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  // ==================== Phase 1: Tag Management Handlers ====================
+
+  /**
+   * List all tags with usage statistics
+   */
+  async listTags(args: Record<string, unknown>): Promise<Types.ListTagsResponse> {
+    const typedArgs = args as Types.ListTagsArgs;
+    const {
+      scope = "all",
+      sort_by = "usage_count",
+      include_unused = false,
+      limit = 50,
+      offset = 0,
+    } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    try {
+      let query = `
+        SELECT
+          id, name, project_path, description, color,
+          created_at, updated_at, usage_count, last_used_at, used_in_types
+        FROM tag_stats
+        WHERE 1=1
+      `;
+      const params: unknown[] = [];
+
+      // Scope filtering
+      if (scope === "project" && projectPath) {
+        query += " AND project_path = ?";
+        params.push(projectPath);
+      } else if (scope === "global") {
+        query += " AND project_path IS NULL";
+      } else if (scope === "all" && projectPath) {
+        query += " AND (project_path = ? OR project_path IS NULL)";
+        params.push(projectPath);
+      }
+
+      // Include unused filter
+      if (!include_unused) {
+        query += " AND usage_count > 0";
+      }
+
+      // Sorting
+      const sortMap: Record<string, string> = {
+        name: "name ASC",
+        usage_count: "usage_count DESC",
+        last_used: "last_used_at DESC NULLS LAST",
+        created: "created_at DESC",
+      };
+      query += ` ORDER BY ${sortMap[sort_by] || "usage_count DESC"}`;
+
+      // Pagination with fetch+1 pattern
+      query += " LIMIT ? OFFSET ?";
+      params.push(limit + 1, offset);
+
+      const rows = this.db.prepare(query).all(...params) as Array<{
+        id: number;
+        name: string;
+        project_path: string | null;
+        description: string | null;
+        color: string | null;
+        created_at: number;
+        updated_at: number;
+        usage_count: number;
+        last_used_at: number | null;
+        used_in_types: string | null;
+      }>;
+
+      const hasMore = rows.length > limit;
+      const tags = rows.slice(0, limit).map((row) => ({
+        id: row.id,
+        name: row.name,
+        project_path: row.project_path,
+        description: row.description,
+        color: row.color,
+        usage_count: row.usage_count,
+        last_used_at: row.last_used_at,
+        used_in_types: row.used_in_types ? row.used_in_types.split(",") : [],
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }));
+
+      // Get total count
+      let countQuery = "SELECT COUNT(*) as total FROM tag_stats WHERE 1=1";
+      const countParams: unknown[] = [];
+      if (scope === "project" && projectPath) {
+        countQuery += " AND project_path = ?";
+        countParams.push(projectPath);
+      } else if (scope === "global") {
+        countQuery += " AND project_path IS NULL";
+      } else if (scope === "all" && projectPath) {
+        countQuery += " AND (project_path = ? OR project_path IS NULL)";
+        countParams.push(projectPath);
+      }
+      if (!include_unused) {
+        countQuery += " AND usage_count > 0";
+      }
+      const countResult = this.db.prepare(countQuery).get(...countParams) as { total: number };
+
+      return {
+        success: true,
+        tags,
+        total: countResult.total,
+        hasMore,
+        message: `Found ${tags.length} tag(s)`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        tags: [],
+        total: 0,
+        hasMore: false,
+        message: `Error listing tags: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Search items by tags
+   */
+  async searchByTags(args: Record<string, unknown>): Promise<Types.SearchByTagsResponse> {
+    const typedArgs = args as unknown as Types.SearchByTagsArgs;
+    const {
+      tags,
+      match_mode = "any",
+      item_types,
+      scope = "all",
+      limit = 20,
+      offset = 0,
+    } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    if (!tags || tags.length === 0) {
+      return {
+        success: false,
+        items: [],
+        total: 0,
+        hasMore: false,
+        tag_breakdown: {},
+        message: "At least one tag is required",
+      };
+    }
+
+    try {
+      // Find tag IDs
+      const tagPlaceholders = tags.map(() => "?").join(",");
+      let tagQuery = `SELECT id, name FROM tags WHERE name IN (${tagPlaceholders})`;
+      const tagParams: unknown[] = [...tags];
+
+      if (scope === "project" && projectPath) {
+        tagQuery += " AND project_path = ?";
+        tagParams.push(projectPath);
+      } else if (scope === "global") {
+        tagQuery += " AND project_path IS NULL";
+      } else if (scope === "all" && projectPath) {
+        tagQuery += " AND (project_path = ? OR project_path IS NULL)";
+        tagParams.push(projectPath);
+      }
+
+      const tagRows = this.db.prepare(tagQuery).all(...tagParams) as Array<{ id: number; name: string }>;
+      const tagIds = tagRows.map((r) => r.id);
+      const tagIdToName = new Map(tagRows.map((r) => [r.id, r.name]));
+
+      if (tagIds.length === 0) {
+        return {
+          success: true,
+          items: [],
+          total: 0,
+          hasMore: false,
+          tag_breakdown: {},
+          message: "No matching tags found",
+        };
+      }
+
+      // Find items with those tags
+      const tagIdPlaceholders = tagIds.map(() => "?").join(",");
+      let itemQuery = `
+        SELECT it.item_type, it.item_id, it.tag_id, it.created_at
+        FROM item_tags it
+        WHERE it.tag_id IN (${tagIdPlaceholders})
+      `;
+      const itemParams: unknown[] = [...tagIds];
+
+      if (item_types && item_types.length > 0) {
+        const typePlaceholders = item_types.map(() => "?").join(",");
+        itemQuery += ` AND it.item_type IN (${typePlaceholders})`;
+        itemParams.push(...item_types);
+      }
+
+      const itemRows = this.db.prepare(itemQuery).all(...itemParams) as Array<{
+        item_type: string;
+        item_id: number;
+        tag_id: number;
+        created_at: number;
+      }>;
+
+      // Group by item
+      const itemMap = new Map<string, {
+        item_type: string;
+        item_id: number;
+        matched_tags: Set<string>;
+        created_at: number;
+      }>();
+
+      for (const row of itemRows) {
+        const key = `${row.item_type}:${row.item_id}`;
+        if (!itemMap.has(key)) {
+          itemMap.set(key, {
+            item_type: row.item_type,
+            item_id: row.item_id,
+            matched_tags: new Set(),
+            created_at: row.created_at,
+          });
+        }
+        const tagName = tagIdToName.get(row.tag_id);
+        if (tagName) {
+          itemMap.get(key)!.matched_tags.add(tagName);
+        }
+      }
+
+      // Filter by match_mode
+      let filteredItems = Array.from(itemMap.values());
+      if (match_mode === "all") {
+        filteredItems = filteredItems.filter((item) => item.matched_tags.size === tags.length);
+      }
+
+      // Calculate tag breakdown
+      const tagBreakdown: Record<string, number> = {};
+      for (const item of filteredItems) {
+        for (const tag of item.matched_tags) {
+          tagBreakdown[tag] = (tagBreakdown[tag] || 0) + 1;
+        }
+      }
+
+      const total = filteredItems.length;
+      const hasMore = offset + limit < total;
+      const paginatedItems = filteredItems.slice(offset, offset + limit);
+
+      // Get summaries for items (simplified - just use item_id for now)
+      const items: Types.TaggedItem[] = paginatedItems.map((item) => ({
+        item_type: item.item_type as Types.TagItemType,
+        item_id: item.item_id,
+        item_summary: `${item.item_type} #${item.item_id}`,
+        matched_tags: Array.from(item.matched_tags),
+        all_tags: Array.from(item.matched_tags),
+        created_at: item.created_at,
+      }));
+
+      return {
+        success: true,
+        items,
+        total,
+        hasMore,
+        tag_breakdown: tagBreakdown,
+        message: `Found ${total} item(s) with matching tags`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        items: [],
+        total: 0,
+        hasMore: false,
+        tag_breakdown: {},
+        message: `Error searching by tags: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Rename a tag
+   */
+  async renameTag(args: Record<string, unknown>): Promise<Types.RenameTagResponse> {
+    const typedArgs = args as unknown as Types.RenameTagArgs;
+    const { old_name, new_name, scope = "project" } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    if (!old_name || !new_name) {
+      return {
+        success: false,
+        old_name: old_name || "",
+        new_name: new_name || "",
+        items_affected: 0,
+        merged: false,
+        message: "Both old_name and new_name are required",
+      };
+    }
+
+    try {
+      return this.db.transaction(() => {
+        // Find the old tag
+        let findQuery = "SELECT id FROM tags WHERE name = ?";
+        const findParams: unknown[] = [old_name];
+        if (scope === "project" && projectPath) {
+          findQuery += " AND project_path = ?";
+          findParams.push(projectPath);
+        } else if (scope === "global") {
+          findQuery += " AND project_path IS NULL";
+        }
+
+        const oldTag = this.db.prepare(findQuery).get(...findParams) as { id: number } | undefined;
+        if (!oldTag) {
+          return {
+            success: false,
+            old_name,
+            new_name,
+            items_affected: 0,
+            merged: false,
+            message: `Tag '${old_name}' not found`,
+          };
+        }
+
+        // Check if new name already exists
+        let existsQuery = "SELECT id FROM tags WHERE name = ?";
+        const existsParams: unknown[] = [new_name];
+        if (scope === "project" && projectPath) {
+          existsQuery += " AND project_path = ?";
+          existsParams.push(projectPath);
+        } else if (scope === "global") {
+          existsQuery += " AND project_path IS NULL";
+        }
+
+        const existingTag = this.db.prepare(existsQuery).get(...existsParams) as { id: number } | undefined;
+
+        if (existingTag) {
+          // Merge: move items from old tag to existing tag
+          const countResult = this.db.prepare(
+            "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?"
+          ).get(oldTag.id) as { count: number };
+
+          // Update item_tags, ignoring duplicates
+          this.db.prepare(`
+            UPDATE OR IGNORE item_tags SET tag_id = ? WHERE tag_id = ?
+          `).run(existingTag.id, oldTag.id);
+
+          // Delete items that couldn't be moved (duplicates)
+          this.db.prepare("DELETE FROM item_tags WHERE tag_id = ?").run(oldTag.id);
+
+          // Delete old tag
+          this.db.prepare("DELETE FROM tags WHERE id = ?").run(oldTag.id);
+
+          return {
+            success: true,
+            old_name,
+            new_name,
+            items_affected: countResult.count,
+            merged: true,
+            message: `Merged '${old_name}' into existing tag '${new_name}'`,
+          };
+        } else {
+          // Simple rename
+          const countResult = this.db.prepare(
+            "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?"
+          ).get(oldTag.id) as { count: number };
+
+          this.db.prepare("UPDATE tags SET name = ?, updated_at = ? WHERE id = ?")
+            .run(new_name, Date.now(), oldTag.id);
+
+          return {
+            success: true,
+            old_name,
+            new_name,
+            items_affected: countResult.count,
+            merged: false,
+            message: `Renamed tag '${old_name}' to '${new_name}'`,
+          };
+        }
+      });
+    } catch (error) {
+      return {
+        success: false,
+        old_name,
+        new_name,
+        items_affected: 0,
+        merged: false,
+        message: `Error renaming tag: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Merge multiple tags into one
+   */
+  async mergeTags(args: Record<string, unknown>): Promise<Types.MergeTagsResponse> {
+    const typedArgs = args as unknown as Types.MergeTagsArgs;
+    const { source_tags, target_tag, scope = "project" } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    if (!source_tags || source_tags.length === 0 || !target_tag) {
+      return {
+        success: false,
+        merged_tags: [],
+        target_tag: target_tag || "",
+        items_retagged: 0,
+        duplicates_removed: 0,
+        message: "source_tags and target_tag are required",
+      };
+    }
+
+    try {
+      return this.db.transaction(() => {
+        const projectCondition = scope === "project" && projectPath
+          ? "AND project_path = ?"
+          : scope === "global"
+            ? "AND project_path IS NULL"
+            : "";
+        const baseParams = scope === "project" && projectPath ? [projectPath] : [];
+
+        // Find or create target tag
+        let targetTagId: number;
+        const existingTarget = this.db.prepare(
+          `SELECT id FROM tags WHERE name = ? ${projectCondition}`
+        ).get(target_tag, ...baseParams) as { id: number } | undefined;
+
+        if (existingTarget) {
+          targetTagId = existingTarget.id;
+        } else {
+          // Create target tag
+          const result = this.db.prepare(
+            "INSERT INTO tags (name, project_path, created_at, updated_at) VALUES (?, ?, ?, ?)"
+          ).run(target_tag, scope === "global" ? null : projectPath, Date.now(), Date.now());
+          targetTagId = Number(result.lastInsertRowid);
+        }
+
+        // Find source tags
+        const sourcePlaceholders = source_tags.map(() => "?").join(",");
+        const sourceTagRows = this.db.prepare(
+          `SELECT id, name FROM tags WHERE name IN (${sourcePlaceholders}) ${projectCondition}`
+        ).all(...source_tags, ...baseParams) as Array<{ id: number; name: string }>;
+
+        const mergedTags: string[] = [];
+        let itemsRetagged = 0;
+        let duplicatesRemoved = 0;
+
+        for (const sourceTag of sourceTagRows) {
+          if (sourceTag.id === targetTagId) continue;
+
+          // Count items before
+          const countBefore = this.db.prepare(
+            "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?"
+          ).get(sourceTag.id) as { count: number };
+
+          // Move items to target (ignore duplicates)
+          this.db.prepare(
+            "UPDATE OR IGNORE item_tags SET tag_id = ? WHERE tag_id = ?"
+          ).run(targetTagId, sourceTag.id);
+
+          // Count remaining (duplicates)
+          const remaining = this.db.prepare(
+            "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?"
+          ).get(sourceTag.id) as { count: number };
+
+          // Delete remaining duplicates
+          this.db.prepare("DELETE FROM item_tags WHERE tag_id = ?").run(sourceTag.id);
+
+          // Delete source tag
+          this.db.prepare("DELETE FROM tags WHERE id = ?").run(sourceTag.id);
+
+          mergedTags.push(sourceTag.name);
+          itemsRetagged += countBefore.count - remaining.count;
+          duplicatesRemoved += remaining.count;
+        }
+
+        return {
+          success: true,
+          merged_tags: mergedTags,
+          target_tag,
+          items_retagged: itemsRetagged,
+          duplicates_removed: duplicatesRemoved,
+          message: `Merged ${mergedTags.length} tag(s) into '${target_tag}'`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        merged_tags: [],
+        target_tag,
+        items_retagged: 0,
+        duplicates_removed: 0,
+        message: `Error merging tags: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Delete a tag
+   */
+  async deleteTag(args: Record<string, unknown>): Promise<Types.DeleteTagResponse> {
+    const typedArgs = args as unknown as Types.DeleteTagArgs;
+    const { name, scope = "project", force = false } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    if (!name) {
+      return {
+        success: false,
+        deleted: false,
+        items_untagged: 0,
+        message: "Tag name is required",
+      };
+    }
+
+    try {
+      return this.db.transaction(() => {
+        const projectCondition = scope === "project" && projectPath
+          ? "AND project_path = ?"
+          : scope === "global"
+            ? "AND project_path IS NULL"
+            : "";
+        const baseParams = scope === "project" && projectPath ? [projectPath] : [];
+
+        // Find tag
+        const tag = this.db.prepare(
+          `SELECT id FROM tags WHERE name = ? ${projectCondition}`
+        ).get(name, ...baseParams) as { id: number } | undefined;
+
+        if (!tag) {
+          return {
+            success: false,
+            deleted: false,
+            items_untagged: 0,
+            message: `Tag '${name}' not found`,
+          };
+        }
+
+        // Check usage
+        const usageResult = this.db.prepare(
+          "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?"
+        ).get(tag.id) as { count: number };
+
+        if (usageResult.count > 0 && !force) {
+          return {
+            success: false,
+            deleted: false,
+            items_untagged: 0,
+            message: `Tag '${name}' has ${usageResult.count} usage(s). Use force=true to delete anyway.`,
+          };
+        }
+
+        // Delete item_tags (cascades from tags table, but explicit is safer)
+        this.db.prepare("DELETE FROM item_tags WHERE tag_id = ?").run(tag.id);
+
+        // Delete tag
+        this.db.prepare("DELETE FROM tags WHERE id = ?").run(tag.id);
+
+        return {
+          success: true,
+          deleted: true,
+          items_untagged: usageResult.count,
+          message: `Deleted tag '${name}'${usageResult.count > 0 ? ` (${usageResult.count} item(s) untagged)` : ""}`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        deleted: false,
+        items_untagged: 0,
+        message: `Error deleting tag: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Add tags to an item
+   */
+  async tagItem(args: Record<string, unknown>): Promise<Types.TagItemResponse> {
+    const typedArgs = args as unknown as Types.TagItemArgs;
+    const { item_type, item_id, tags } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!item_type || item_id === undefined || !tags || tags.length === 0) {
+      return {
+        success: false,
+        item_type: item_type || ("memory" as Types.TagItemType),
+        item_id: item_id || 0,
+        tags_added: [],
+        tags_existed: [],
+        message: "item_type, item_id, and tags are required",
+      };
+    }
+
+    try {
+      return this.db.transaction(() => {
+        const tagsAdded: string[] = [];
+        const tagsExisted: string[] = [];
+
+        for (const tagName of tags) {
+          // Find or create tag
+          let tag = this.db.prepare(
+            "SELECT id FROM tags WHERE name = ? AND (project_path = ? OR project_path IS NULL)"
+          ).get(tagName, projectPath) as { id: number } | undefined;
+
+          if (!tag) {
+            const result = this.db.prepare(
+              "INSERT INTO tags (name, project_path, created_at, updated_at) VALUES (?, ?, ?, ?)"
+            ).run(tagName, projectPath, Date.now(), Date.now());
+            tag = { id: Number(result.lastInsertRowid) };
+          }
+
+          // Try to add item_tag
+          const itemIdNum = typeof item_id === "string" ? 0 : item_id; // For memory, we need to resolve key to id
+          try {
+            this.db.prepare(
+              "INSERT INTO item_tags (tag_id, item_type, item_id, created_at) VALUES (?, ?, ?, ?)"
+            ).run(tag.id, item_type, itemIdNum, Date.now());
+            tagsAdded.push(tagName);
+          } catch (_e) {
+            // Duplicate - tag already exists on item
+            tagsExisted.push(tagName);
+          }
+        }
+
+        return {
+          success: true,
+          item_type,
+          item_id,
+          tags_added: tagsAdded,
+          tags_existed: tagsExisted,
+          message: `Added ${tagsAdded.length} tag(s), ${tagsExisted.length} already existed`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        item_type,
+        item_id,
+        tags_added: [],
+        tags_existed: [],
+        message: `Error tagging item: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Remove tags from an item
+   */
+  async untagItem(args: Record<string, unknown>): Promise<Types.UntagItemResponse> {
+    const typedArgs = args as unknown as Types.UntagItemArgs;
+    const { item_type, item_id, tags } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!item_type || item_id === undefined) {
+      return {
+        success: false,
+        item_type: item_type || ("memory" as Types.TagItemType),
+        item_id: item_id || 0,
+        tags_removed: [],
+        message: "item_type and item_id are required",
+      };
+    }
+
+    try {
+      return this.db.transaction(() => {
+        const itemIdNum = typeof item_id === "string" ? 0 : item_id;
+        const tagsRemoved: string[] = [];
+
+        if (tags && tags.length > 0) {
+          // Remove specific tags
+          for (const tagName of tags) {
+            const tag = this.db.prepare(
+              "SELECT id FROM tags WHERE name = ? AND (project_path = ? OR project_path IS NULL)"
+            ).get(tagName, projectPath) as { id: number } | undefined;
+
+            if (tag) {
+              const result = this.db.prepare(
+                "DELETE FROM item_tags WHERE tag_id = ? AND item_type = ? AND item_id = ?"
+              ).run(tag.id, item_type, itemIdNum);
+              if (result.changes > 0) {
+                tagsRemoved.push(tagName);
+              }
+            }
+          }
+        } else {
+          // Remove all tags from item
+          const currentTags = this.db.prepare(`
+            SELECT t.name FROM tags t
+            JOIN item_tags it ON t.id = it.tag_id
+            WHERE it.item_type = ? AND it.item_id = ?
+          `).all(item_type, itemIdNum) as Array<{ name: string }>;
+
+          this.db.prepare(
+            "DELETE FROM item_tags WHERE item_type = ? AND item_id = ?"
+          ).run(item_type, itemIdNum);
+
+          tagsRemoved.push(...currentTags.map((t) => t.name));
+        }
+
+        return {
+          success: true,
+          item_type,
+          item_id,
+          tags_removed: tagsRemoved,
+          message: `Removed ${tagsRemoved.length} tag(s)`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        item_type,
+        item_id,
+        tags_removed: [],
+        message: `Error untagging item: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  // ==================== Phase 1: Memory Confidence Handlers ====================
+
+  /**
+   * Set memory confidence level
+   */
+  async setMemoryConfidence(args: Record<string, unknown>): Promise<Types.SetMemoryConfidenceResponse> {
+    const typedArgs = args as unknown as Types.SetMemoryConfidenceArgs;
+    const { key, confidence, evidence, verified_by } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!key || !confidence) {
+      return {
+        success: false,
+        key: key || "",
+        previous_confidence: null,
+        new_confidence: confidence || "",
+        verified_at: null,
+        message: "key and confidence are required",
+      };
+    }
+
+    try {
+      // Get current memory
+      const memory = this.db.prepare(
+        "SELECT id, confidence FROM working_memory WHERE key = ? AND project_path = ?"
+      ).get(key, projectPath) as { id: number; confidence: string | null } | undefined;
+
+      if (!memory) {
+        return {
+          success: false,
+          key,
+          previous_confidence: null,
+          new_confidence: confidence,
+          verified_at: null,
+          message: `Memory '${key}' not found`,
+        };
+      }
+
+      const now = Date.now();
+      const verifiedAt = (confidence === "confirmed" || confidence === "verified") ? now : null;
+
+      // Update memory
+      let updateQuery = "UPDATE working_memory SET confidence = ?, updated_at = ?";
+      const updateParams: unknown[] = [confidence, now];
+
+      if (verifiedAt) {
+        updateQuery += ", verified_at = ?";
+        updateParams.push(verifiedAt);
+      }
+      if (verified_by) {
+        updateQuery += ", verified_by = ?";
+        updateParams.push(verified_by);
+      }
+      if (evidence) {
+        updateQuery += ", context = COALESCE(context, '') || ' | Evidence: ' || ?";
+        updateParams.push(evidence);
+      }
+
+      updateQuery += " WHERE id = ?";
+      updateParams.push(memory.id);
+
+      this.db.prepare(updateQuery).run(...updateParams);
+
+      return {
+        success: true,
+        key,
+        previous_confidence: memory.confidence,
+        new_confidence: confidence,
+        verified_at: verifiedAt,
+        message: `Updated confidence to '${confidence}'${verifiedAt ? " (verified)" : ""}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        key,
+        previous_confidence: null,
+        new_confidence: confidence,
+        verified_at: null,
+        message: `Error setting confidence: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Set memory importance level
+   */
+  async setMemoryImportance(args: Record<string, unknown>): Promise<Types.SetMemoryImportanceResponse> {
+    const typedArgs = args as unknown as Types.SetMemoryImportanceArgs;
+    const { key, importance } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!key || !importance) {
+      return {
+        success: false,
+        key: key || "",
+        previous_importance: null,
+        new_importance: importance || "",
+        message: "key and importance are required",
+      };
+    }
+
+    try {
+      const memory = this.db.prepare(
+        "SELECT id, importance FROM working_memory WHERE key = ? AND project_path = ?"
+      ).get(key, projectPath) as { id: number; importance: string | null } | undefined;
+
+      if (!memory) {
+        return {
+          success: false,
+          key,
+          previous_importance: null,
+          new_importance: importance,
+          message: `Memory '${key}' not found`,
+        };
+      }
+
+      this.db.prepare(
+        "UPDATE working_memory SET importance = ?, updated_at = ? WHERE id = ?"
+      ).run(importance, Date.now(), memory.id);
+
+      return {
+        success: true,
+        key,
+        previous_importance: memory.importance,
+        new_importance: importance,
+        message: `Updated importance to '${importance}'`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        key,
+        previous_importance: null,
+        new_importance: importance,
+        message: `Error setting importance: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Pin/unpin a memory
+   */
+  async pinMemory(args: Record<string, unknown>): Promise<Types.PinMemoryResponse> {
+    const typedArgs = args as unknown as Types.PinMemoryArgs;
+    const { key, pinned = true } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!key) {
+      return {
+        success: false,
+        key: "",
+        pinned: false,
+        message: "key is required",
+      };
+    }
+
+    try {
+      const result = this.db.prepare(
+        "UPDATE working_memory SET pinned = ?, updated_at = ? WHERE key = ? AND project_path = ?"
+      ).run(pinned ? 1 : 0, Date.now(), key, projectPath);
+
+      if (result.changes === 0) {
+        return {
+          success: false,
+          key,
+          pinned: false,
+          message: `Memory '${key}' not found`,
+        };
+      }
+
+      return {
+        success: true,
+        key,
+        pinned,
+        message: pinned ? `Pinned memory '${key}'` : `Unpinned memory '${key}'`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        key,
+        pinned: false,
+        message: `Error pinning memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Archive a memory
+   */
+  async archiveMemory(args: Record<string, unknown>): Promise<Types.ArchiveMemoryResponse> {
+    const typedArgs = args as unknown as Types.ArchiveMemoryArgs;
+    const { key, reason } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!key) {
+      return {
+        success: false,
+        key: "",
+        archived: false,
+        reason: null,
+        message: "key is required",
+      };
+    }
+
+    try {
+      const result = this.db.prepare(
+        "UPDATE working_memory SET archived = 1, archive_reason = ?, updated_at = ? WHERE key = ? AND project_path = ?"
+      ).run(reason || null, Date.now(), key, projectPath);
+
+      if (result.changes === 0) {
+        return {
+          success: false,
+          key,
+          archived: false,
+          reason: null,
+          message: `Memory '${key}' not found`,
+        };
+      }
+
+      return {
+        success: true,
+        key,
+        archived: true,
+        reason: reason || null,
+        message: `Archived memory '${key}'${reason ? `: ${reason}` : ""}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        key,
+        archived: false,
+        reason: null,
+        message: `Error archiving memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Unarchive a memory
+   */
+  async unarchiveMemory(args: Record<string, unknown>): Promise<Types.UnarchiveMemoryResponse> {
+    const typedArgs = args as unknown as Types.UnarchiveMemoryArgs;
+    const { key } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    if (!key) {
+      return {
+        success: false,
+        key: "",
+        message: "key is required",
+      };
+    }
+
+    try {
+      const result = this.db.prepare(
+        "UPDATE working_memory SET archived = 0, archive_reason = NULL, updated_at = ? WHERE key = ? AND project_path = ?"
+      ).run(Date.now(), key, projectPath);
+
+      if (result.changes === 0) {
+        return {
+          success: false,
+          key,
+          message: `Memory '${key}' not found`,
+        };
+      }
+
+      return {
+        success: true,
+        key,
+        message: `Unarchived memory '${key}'`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        key,
+        message: `Error unarchiving memory: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Search memories by quality filters
+   */
+  async searchMemoryByQuality(args: Record<string, unknown>): Promise<Types.SearchMemoryByQualityResponse> {
+    const typedArgs = args as Types.SearchMemoryByQualityArgs;
+    const {
+      query,
+      confidence,
+      importance,
+      pinned_only = false,
+      include_archived = false,
+      scope = "project",
+      sort_by = "importance",
+      limit = 20,
+      offset = 0,
+    } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    try {
+      let sqlQuery = "SELECT * FROM working_memory WHERE 1=1";
+      const params: unknown[] = [];
+
+      // Project/scope filter
+      if (scope === "project") {
+        sqlQuery += " AND project_path = ?";
+        params.push(projectPath);
+      }
+
+      // Archived filter
+      if (!include_archived) {
+        sqlQuery += " AND (archived = 0 OR archived IS NULL)";
+      }
+
+      // Pinned filter
+      if (pinned_only) {
+        sqlQuery += " AND pinned = 1";
+      }
+
+      // Confidence filter
+      if (confidence && confidence.length > 0) {
+        const placeholders = confidence.map(() => "?").join(",");
+        sqlQuery += ` AND confidence IN (${placeholders})`;
+        params.push(...confidence);
+      }
+
+      // Importance filter
+      if (importance && importance.length > 0) {
+        const placeholders = importance.map(() => "?").join(",");
+        sqlQuery += ` AND importance IN (${placeholders})`;
+        params.push(...importance);
+      }
+
+      // Text search
+      if (query) {
+        sqlQuery += " AND (key LIKE ? OR value LIKE ? OR context LIKE ?)";
+        const searchTerm = `%${query}%`;
+        params.push(searchTerm, searchTerm, searchTerm);
+      }
+
+      // Sorting
+      const sortMap: Record<string, string> = {
+        relevance: "updated_at DESC",
+        importance: "CASE importance WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 5 END, updated_at DESC",
+        confidence: "CASE confidence WHEN 'verified' THEN 1 WHEN 'confirmed' THEN 2 WHEN 'likely' THEN 3 WHEN 'uncertain' THEN 4 ELSE 5 END, updated_at DESC",
+        recent: "updated_at DESC",
+      };
+      sqlQuery += ` ORDER BY ${sortMap[sort_by] || "updated_at DESC"}`;
+
+      // Pagination
+      sqlQuery += " LIMIT ? OFFSET ?";
+      params.push(limit + 1, offset);
+
+      const rows = this.db.prepare(sqlQuery).all(...params) as Array<{
+        id: string;
+        key: string;
+        value: string;
+        context: string | null;
+        tags: string | null;
+        created_at: number;
+        updated_at: number;
+        expires_at: number | null;
+        confidence: string | null;
+        importance: string | null;
+        pinned: number | null;
+        archived: number | null;
+        archive_reason: string | null;
+        source: string | null;
+        source_session_id: string | null;
+        verified_at: number | null;
+        verified_by: string | null;
+      }>;
+
+      const hasMore = rows.length > limit;
+      const items: Types.MemoryItem[] = rows.slice(0, limit).map((row) => ({
+        id: row.id,
+        key: row.key,
+        value: row.value,
+        context: row.context || undefined,
+        tags: row.tags ? safeJsonParse(row.tags, []) : [],
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: new Date(row.updated_at).toISOString(),
+        expires_at: row.expires_at ? new Date(row.expires_at).toISOString() : undefined,
+        confidence: row.confidence || undefined,
+        importance: row.importance || undefined,
+        pinned: row.pinned === 1,
+        archived: row.archived === 1,
+        archive_reason: row.archive_reason || undefined,
+        source: row.source || undefined,
+        source_session_id: row.source_session_id || undefined,
+        verified_at: row.verified_at ? new Date(row.verified_at).toISOString() : undefined,
+        verified_by: row.verified_by || undefined,
+      }));
+
+      return {
+        success: true,
+        items,
+        total: items.length,
+        hasMore,
+        message: `Found ${items.length} memor${items.length === 1 ? "y" : "ies"}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        items: [],
+        total: 0,
+        hasMore: false,
+        message: `Error searching memories: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Get memory statistics
+   */
+  async getMemoryStats(args: Record<string, unknown>): Promise<Types.GetMemoryStatsResponse> {
+    const typedArgs = args as Types.GetMemoryStatsArgs;
+    const { scope = "project" } = typedArgs;
+    const projectPath = this.resolveProjectPath(typedArgs.project_path);
+
+    try {
+      const projectCondition = scope === "project" ? "WHERE project_path = ?" : "";
+      const params = scope === "project" ? [projectPath] : [];
+
+      // Total count
+      const totalResult = this.db.prepare(
+        `SELECT COUNT(*) as count FROM working_memory ${projectCondition}`
+      ).get(...params) as { count: number };
+
+      // Active (non-archived)
+      const activeResult = this.db.prepare(
+        `SELECT COUNT(*) as count FROM working_memory ${projectCondition ? projectCondition + " AND" : "WHERE"} (archived = 0 OR archived IS NULL)`
+      ).get(...params) as { count: number };
+
+      // Archived
+      const archivedResult = this.db.prepare(
+        `SELECT COUNT(*) as count FROM working_memory ${projectCondition ? projectCondition + " AND" : "WHERE"} archived = 1`
+      ).get(...params) as { count: number };
+
+      // Pinned
+      const pinnedResult = this.db.prepare(
+        `SELECT COUNT(*) as count FROM working_memory ${projectCondition ? projectCondition + " AND" : "WHERE"} pinned = 1`
+      ).get(...params) as { count: number };
+
+      // By confidence
+      const confidenceRows = this.db.prepare(`
+        SELECT COALESCE(confidence, 'likely') as level, COUNT(*) as count
+        FROM working_memory ${projectCondition}
+        GROUP BY COALESCE(confidence, 'likely')
+      `).all(...params) as Array<{ level: string; count: number }>;
+      const byConfidence = { uncertain: 0, likely: 0, confirmed: 0, verified: 0 };
+      for (const row of confidenceRows) {
+        if (row.level in byConfidence) {
+          byConfidence[row.level as keyof typeof byConfidence] = row.count;
+        }
+      }
+
+      // By importance
+      const importanceRows = this.db.prepare(`
+        SELECT COALESCE(importance, 'normal') as level, COUNT(*) as count
+        FROM working_memory ${projectCondition}
+        GROUP BY COALESCE(importance, 'normal')
+      `).all(...params) as Array<{ level: string; count: number }>;
+      const byImportance = { low: 0, normal: 0, high: 0, critical: 0 };
+      for (const row of importanceRows) {
+        if (row.level in byImportance) {
+          byImportance[row.level as keyof typeof byImportance] = row.count;
+        }
+      }
+
+      // Expired
+      const now = Date.now();
+      const expiredResult = this.db.prepare(
+        `SELECT COUNT(*) as count FROM working_memory ${projectCondition ? projectCondition + " AND" : "WHERE"} expires_at IS NOT NULL AND expires_at < ?`
+      ).get(...params, now) as { count: number };
+
+      // Expiring soon (within 7 days)
+      const sevenDays = 7 * 24 * 60 * 60 * 1000;
+      const expiringSoonResult = this.db.prepare(
+        `SELECT COUNT(*) as count FROM working_memory ${projectCondition ? projectCondition + " AND" : "WHERE"} expires_at IS NOT NULL AND expires_at >= ? AND expires_at < ?`
+      ).get(...params, now, now + sevenDays) as { count: number };
+
+      // Top tags
+      const topTags: Array<{ tag: string; count: number }> = [];
+
+      return {
+        success: true,
+        total: totalResult.count,
+        active: activeResult.count,
+        archived: archivedResult.count,
+        pinned: pinnedResult.count,
+        by_confidence: byConfidence,
+        by_importance: byImportance,
+        expired: expiredResult.count,
+        expiring_soon: expiringSoonResult.count,
+        top_tags: topTags,
+        message: `Memory stats for ${scope === "project" ? "project" : "global"}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        total: 0,
+        active: 0,
+        archived: 0,
+        pinned: 0,
+        by_confidence: { uncertain: 0, likely: 0, confirmed: 0, verified: 0 },
+        by_importance: { low: 0, normal: 0, high: 0, critical: 0 },
+        expired: 0,
+        expiring_soon: 0,
+        top_tags: [],
+        message: `Error getting stats: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  // ==================== Phase 1: Cleanup/Maintenance Handlers ====================
+
+  /**
+   * Get storage statistics
+   */
+  async getStorageStats(args: Record<string, unknown>): Promise<Types.GetStorageStatsResponse> {
+    const typedArgs = args as Types.GetStorageStatsArgs;
+    // Reserved for future project-specific filtering
+    void typedArgs.detailed;
+    void typedArgs.project_path;
+
+    try {
+      const dbStats = this.db.getStats();
+
+      // Get table counts
+      const tables = [
+        { name: "conversations", type: "conversations" },
+        { name: "messages", type: "messages" },
+        { name: "decisions", type: "decisions" },
+        { name: "mistakes", type: "mistakes" },
+        { name: "working_memory", type: "memories" },
+        { name: "message_embeddings", type: "embeddings" },
+      ];
+
+      const byType: Record<string, Types.StorageTypeStats> = {};
+      for (const table of tables) {
+        try {
+          const result = this.db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get() as { count: number };
+          byType[table.type] = { count: result.count, size_bytes: 0 };
+        } catch {
+          byType[table.type] = { count: 0, size_bytes: 0 };
+        }
+      }
+
+      // Fill in missing types
+      const allTypes = ["conversations", "messages", "decisions", "mistakes", "patterns", "memories", "learnings", "embeddings", "history"];
+      for (const type of allTypes) {
+        if (!byType[type]) {
+          byType[type] = { count: 0, size_bytes: 0 };
+        }
+      }
+
+      // Get oldest and newest
+      let oldest = 0;
+      let newest = 0;
+      try {
+        const oldestResult = this.db.prepare("SELECT MIN(created_at) as ts FROM conversations").get() as { ts: number | null };
+        const newestResult = this.db.prepare("SELECT MAX(updated_at) as ts FROM conversations").get() as { ts: number | null };
+        oldest = oldestResult.ts || 0;
+        newest = newestResult.ts || 0;
+      } catch {
+        // Ignore
+      }
+
+      // Format size
+      const formatSize = (bytes: number): string => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+        return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+      };
+
+      const recommendations: string[] = [];
+      const sizeInMB = dbStats.fileSize / (1024 * 1024);
+      if (sizeInMB > 100) {
+        recommendations.push("Database is large. Consider running cleanup_stale to remove old items.");
+      }
+      if (byType.embeddings.count > 10000) {
+        recommendations.push("Many embeddings stored. Consider pruning unused embeddings.");
+      }
+
+      return {
+        success: true,
+        database_path: dbStats.dbPath,
+        total_size_bytes: dbStats.fileSize,
+        total_size_human: formatSize(dbStats.fileSize),
+        by_type: byType as Types.GetStorageStatsResponse["by_type"],
+        oldest_item: oldest,
+        newest_item: newest,
+        fragmentation_percent: 0,
+        recommendations,
+        message: `Database size: ${formatSize(dbStats.fileSize)}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        database_path: "",
+        total_size_bytes: 0,
+        total_size_human: "0 B",
+        by_type: {
+          conversations: { count: 0, size_bytes: 0 },
+          messages: { count: 0, size_bytes: 0 },
+          decisions: { count: 0, size_bytes: 0 },
+          mistakes: { count: 0, size_bytes: 0 },
+          patterns: { count: 0, size_bytes: 0 },
+          memories: { count: 0, size_bytes: 0 },
+          learnings: { count: 0, size_bytes: 0 },
+          embeddings: { count: 0, size_bytes: 0 },
+          history: { count: 0, size_bytes: 0 },
+        },
+        oldest_item: 0,
+        newest_item: 0,
+        fragmentation_percent: 0,
+        recommendations: [],
+        message: `Error getting storage stats: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Find stale items
+   */
+  async findStaleItems(args: Record<string, unknown>): Promise<Types.FindStaleItemsResponse> {
+    const typedArgs = args as Types.FindStaleItemsArgs;
+    const {
+      item_types = ["memory", "decision", "pattern"],
+      stale_threshold_days = 90,
+      exclude_pinned = true,
+      exclude_important = true,
+      limit = 50,
+    } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    try {
+      const staleItems: Types.StaleItem[] = [];
+      const byType: Record<string, number> = {};
+      const now = Date.now();
+      const threshold = now - stale_threshold_days * 24 * 60 * 60 * 1000;
+
+      // Check memories
+      if (item_types.includes("memory")) {
+        let query = "SELECT id, key, updated_at, importance FROM working_memory WHERE updated_at < ?";
+        const params: unknown[] = [threshold];
+
+        if (projectPath) {
+          query += " AND project_path = ?";
+          params.push(projectPath);
+        }
+        if (exclude_pinned) {
+          query += " AND (pinned = 0 OR pinned IS NULL)";
+        }
+        if (exclude_important) {
+          query += " AND importance NOT IN ('high', 'critical')";
+        }
+        query += " ORDER BY updated_at ASC LIMIT ?";
+        params.push(limit);
+
+        const rows = this.db.prepare(query).all(...params) as Array<{
+          id: number;
+          key: string;
+          updated_at: number;
+          importance: string | null;
+        }>;
+
+        for (const row of rows) {
+          const daysStale = Math.floor((now - row.updated_at) / (24 * 60 * 60 * 1000));
+          staleItems.push({
+            item_type: "memory",
+            item_id: row.id,
+            identifier: row.key,
+            last_accessed: row.updated_at,
+            days_stale: daysStale,
+            importance: row.importance || "normal",
+            size_estimate: 100,
+          });
+        }
+        byType.memory = rows.length;
+      }
+
+      // Similar logic for decisions
+      if (item_types.includes("decision")) {
+        let query = "SELECT id, decision_text, timestamp FROM decisions WHERE timestamp < ?";
+        const params: unknown[] = [threshold];
+        query += " ORDER BY timestamp ASC LIMIT ?";
+        params.push(limit);
+
+        const rows = this.db.prepare(query).all(...params) as Array<{
+          id: number;
+          decision_text: string;
+          timestamp: number;
+        }>;
+
+        for (const row of rows) {
+          const daysStale = Math.floor((now - row.timestamp) / (24 * 60 * 60 * 1000));
+          staleItems.push({
+            item_type: "decision",
+            item_id: row.id,
+            identifier: row.decision_text.slice(0, 50),
+            last_accessed: row.timestamp,
+            days_stale: daysStale,
+            importance: "normal",
+            size_estimate: 200,
+          });
+        }
+        byType.decision = rows.length;
+      }
+
+      const totalSize = staleItems.reduce((sum, item) => sum + item.size_estimate, 0);
+
+      return {
+        success: true,
+        stale_items: staleItems.slice(0, limit),
+        total_stale: staleItems.length,
+        total_size_bytes: totalSize,
+        by_type: byType,
+        message: `Found ${staleItems.length} stale item(s)`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        stale_items: [],
+        total_stale: 0,
+        total_size_bytes: 0,
+        by_type: {},
+        message: `Error finding stale items: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Find duplicates (simplified - uses text similarity)
+   */
+  async findDuplicates(args: Record<string, unknown>): Promise<Types.FindDuplicatesResponse> {
+    const typedArgs = args as Types.FindDuplicatesArgs;
+    const {
+      item_types = ["memory", "decision"],
+      similarity_threshold: _similarity_threshold = 0.85,
+      limit = 20,
+    } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    try {
+      // Simplified duplicate detection - exact matches only for now
+      const duplicateGroups: Types.DuplicateGroup[] = [];
+
+      if (item_types.includes("memory")) {
+        let query = "SELECT id, key, value, created_at, importance FROM working_memory";
+        const params: unknown[] = [];
+        if (projectPath) {
+          query += " WHERE project_path = ?";
+          params.push(projectPath);
+        }
+
+        const rows = this.db.prepare(query).all(...params) as Array<{
+          id: number;
+          key: string;
+          value: string;
+          created_at: number;
+          importance: string | null;
+        }>;
+
+        // Group by value hash (exact duplicates)
+        const valueMap = new Map<string, typeof rows>();
+        for (const row of rows) {
+          const key = row.value.toLowerCase().trim();
+          if (!valueMap.has(key)) {
+            valueMap.set(key, []);
+          }
+          valueMap.get(key)!.push(row);
+        }
+
+        let groupId = 1;
+        for (const [_value, group] of valueMap) {
+          if (group.length > 1) {
+            // Sort by importance and created_at to determine which to keep
+            const sorted = [...group].sort((a, b) => {
+              const impOrder: Record<string, number> = { critical: 1, high: 2, normal: 3, low: 4 };
+              const impDiff = (impOrder[a.importance || "normal"] || 3) - (impOrder[b.importance || "normal"] || 3);
+              if (impDiff !== 0) return impDiff;
+              return b.created_at - a.created_at;
+            });
+
+            duplicateGroups.push({
+              group_id: groupId++,
+              item_type: "memory",
+              items: sorted.map((r) => ({
+                id: r.id,
+                identifier: r.key,
+                content_preview: r.value.slice(0, 100),
+                created_at: r.created_at,
+                importance: r.importance || "normal",
+              })),
+              similarity_score: 1.0,
+              recommended_keep: sorted[0].id,
+              recommendation_reason: "Highest importance and most recent",
+            });
+          }
+        }
+      }
+
+      const potentialSavings = duplicateGroups.reduce(
+        (sum, g) => sum + g.items.length - 1, 0
+      );
+
+      return {
+        success: true,
+        duplicate_groups: duplicateGroups.slice(0, limit),
+        total_groups: duplicateGroups.length,
+        potential_savings: potentialSavings,
+        message: `Found ${duplicateGroups.length} duplicate group(s)`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        duplicate_groups: [],
+        total_groups: 0,
+        potential_savings: 0,
+        message: `Error finding duplicates: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Merge duplicates
+   */
+  async mergeDuplicates(args: Record<string, unknown>): Promise<Types.MergeDuplicatesResponse> {
+    const typedArgs = args as unknown as Types.MergeDuplicatesArgs;
+    const { item_type, keep_id, merge_ids, merge_tags = true } = typedArgs;
+
+    if (!item_type || !keep_id || !merge_ids || merge_ids.length === 0) {
+      return {
+        success: false,
+        kept_id: keep_id || 0,
+        merged_count: 0,
+        tags_merged: [],
+        references_updated: 0,
+        message: "item_type, keep_id, and merge_ids are required",
+      };
+    }
+
+    try {
+      return this.db.transaction(() => {
+        const tagsMerged: string[] = [];
+
+        if (item_type === "memory") {
+          // Merge tags if requested
+          if (merge_tags) {
+            for (const mergeId of merge_ids) {
+              const tags = this.db.prepare(
+                "SELECT t.name FROM tags t JOIN item_tags it ON t.id = it.tag_id WHERE it.item_type = 'memory' AND it.item_id = ?"
+              ).all(mergeId) as Array<{ name: string }>;
+
+              for (const tag of tags) {
+                if (!tagsMerged.includes(tag.name)) {
+                  tagsMerged.push(tag.name);
+                }
+              }
+            }
+          }
+
+          // Delete merged items
+          const placeholders = merge_ids.map(() => "?").join(",");
+          this.db.prepare(`DELETE FROM working_memory WHERE id IN (${placeholders})`).run(...merge_ids);
+        }
+
+        return {
+          success: true,
+          kept_id: keep_id,
+          merged_count: merge_ids.length,
+          tags_merged: tagsMerged,
+          references_updated: 0,
+          message: `Merged ${merge_ids.length} item(s) into #${keep_id}`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        kept_id: keep_id,
+        merged_count: 0,
+        tags_merged: [],
+        references_updated: 0,
+        message: `Error merging duplicates: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Cleanup stale items
+   */
+  async cleanupStale(args: Record<string, unknown>): Promise<Types.CleanupStaleResponse> {
+    const typedArgs = args as Types.CleanupStaleArgs;
+    const {
+      item_types,
+      stale_threshold_days = 90,
+      action = "preview",
+      exclude_pinned = true,
+      exclude_important = true,
+      max_items = 100,
+    } = typedArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    try {
+      // Find stale items first
+      const staleResult = await this.findStaleItems({
+        item_types: item_types as Array<"memory" | "decision" | "pattern" | "session">,
+        stale_threshold_days,
+        exclude_pinned,
+        exclude_important,
+        project_path: projectPath,
+        limit: max_items,
+      });
+
+      if (!staleResult.success || staleResult.stale_items.length === 0) {
+        return {
+          success: true,
+          action,
+          preview_only: action === "preview",
+          items_affected: 0,
+          by_type: {},
+          space_freed_bytes: 0,
+          items: [],
+          message: "No stale items found",
+        };
+      }
+
+      const items = staleResult.stale_items.map((item) => ({
+        type: item.item_type,
+        id: item.item_id,
+        identifier: item.identifier,
+      }));
+
+      if (action === "preview") {
+        return {
+          success: true,
+          action: "preview",
+          preview_only: true,
+          items_affected: items.length,
+          by_type: staleResult.by_type,
+          space_freed_bytes: staleResult.total_size_bytes,
+          items,
+          message: `Would affect ${items.length} item(s). Use action='delete' or action='archive' to proceed.`,
+        };
+      }
+
+      // Execute cleanup
+      return this.db.transaction(() => {
+        for (const item of items) {
+          if (item.type === "memory") {
+            if (action === "archive") {
+              this.db.prepare(
+                "UPDATE working_memory SET archived = 1, archive_reason = 'Stale cleanup', updated_at = ? WHERE id = ?"
+              ).run(Date.now(), item.id);
+            } else if (action === "delete") {
+              this.db.prepare("DELETE FROM working_memory WHERE id = ?").run(item.id);
+            }
+          }
+          // Similar for other types
+        }
+
+        // Log maintenance
+        this.db.prepare(`
+          INSERT INTO maintenance_log (task_type, started_at, completed_at, status, items_processed, items_affected, details)
+          VALUES (?, ?, ?, 'completed', ?, ?, ?)
+        `).run(
+          "cleanup_stale",
+          Date.now(),
+          Date.now(),
+          items.length,
+          items.length,
+          JSON.stringify({ action, threshold_days: stale_threshold_days })
+        );
+
+        return {
+          success: true,
+          action,
+          preview_only: false,
+          items_affected: items.length,
+          by_type: staleResult.by_type,
+          space_freed_bytes: staleResult.total_size_bytes,
+          items,
+          message: `${action === "archive" ? "Archived" : "Deleted"} ${items.length} stale item(s)`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        action,
+        preview_only: action === "preview",
+        items_affected: 0,
+        by_type: {},
+        space_freed_bytes: 0,
+        items: [],
+        message: `Error cleaning up stale items: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Vacuum database
+   */
+  async vacuumDatabase(args: Record<string, unknown>): Promise<Types.VacuumDatabaseResponse> {
+    const typedArgs = args as Types.VacuumDatabaseArgs;
+    const { analyze = true, reindex = false } = typedArgs;
+
+    try {
+      const startTime = Date.now();
+      const statsBefore = this.db.getStats();
+
+      // VACUUM must run outside of a transaction
+      this.db.exec("VACUUM");
+
+      if (analyze) {
+        this.db.exec("ANALYZE");
+      }
+
+      if (reindex) {
+        this.db.exec("REINDEX");
+      }
+
+      const statsAfter = this.db.getStats();
+      const duration = Date.now() - startTime;
+
+      const sizeBefore = statsBefore.fileSize;
+      const sizeAfter = statsAfter.fileSize;
+
+      // Log maintenance
+      this.db.prepare(`
+        INSERT INTO maintenance_log (task_type, started_at, completed_at, status, details)
+        VALUES (?, ?, ?, 'completed', ?)
+      `).run(
+        "vacuum",
+        startTime,
+        Date.now(),
+        JSON.stringify({ analyze, reindex, size_before: sizeBefore, size_after: sizeAfter })
+      );
+
+      return {
+        success: true,
+        size_before: sizeBefore,
+        size_after: sizeAfter,
+        space_freed: sizeBefore - sizeAfter,
+        duration_ms: duration,
+        message: `Vacuum completed in ${duration}ms. Freed ${Math.max(0, sizeBefore - sizeAfter)} bytes.`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        size_before: 0,
+        size_after: 0,
+        space_freed: 0,
+        duration_ms: 0,
+        message: `Error vacuuming database: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Cleanup orphaned records
+   */
+  async cleanupOrphans(args: Record<string, unknown>): Promise<Types.CleanupOrphansResponse> {
+    const typedArgs = args as Types.CleanupOrphansArgs;
+    const { preview = true } = typedArgs;
+
+    try {
+      const orphansFound = {
+        tags_without_items: 0,
+        embeddings_without_items: 0,
+        history_without_items: 0,
+        links_without_targets: 0,
+      };
+
+      // Find orphaned tags
+      const orphanedTags = this.db.prepare(`
+        SELECT COUNT(*) as count FROM tags t
+        WHERE NOT EXISTS (SELECT 1 FROM item_tags it WHERE it.tag_id = t.id)
+      `).get() as { count: number };
+      orphansFound.tags_without_items = orphanedTags.count;
+
+      // Find orphaned embeddings
+      const orphanedEmbeddings = this.db.prepare(`
+        SELECT COUNT(*) as count FROM message_embeddings e
+        WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = e.message_id)
+      `).get() as { count: number };
+      orphansFound.embeddings_without_items = orphanedEmbeddings.count;
+
+      const totalOrphans = Object.values(orphansFound).reduce((a, b) => a + b, 0);
+
+      if (preview) {
+        return {
+          success: true,
+          preview_only: true,
+          orphans_found: orphansFound,
+          total_orphans: totalOrphans,
+          cleaned: 0,
+          message: `Found ${totalOrphans} orphan(s). Use preview=false to clean.`,
+        };
+      }
+
+      // Execute cleanup
+      return this.db.transaction(() => {
+        let cleaned = 0;
+
+        // Delete orphaned tags
+        const tagResult = this.db.prepare(`
+          DELETE FROM tags WHERE NOT EXISTS (SELECT 1 FROM item_tags it WHERE it.tag_id = tags.id)
+        `).run();
+        cleaned += tagResult.changes;
+
+        // Delete orphaned embeddings
+        const embedResult = this.db.prepare(`
+          DELETE FROM message_embeddings WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.id = message_embeddings.message_id)
+        `).run();
+        cleaned += embedResult.changes;
+
+        // Log maintenance
+        this.db.prepare(`
+          INSERT INTO maintenance_log (task_type, started_at, completed_at, status, items_affected, details)
+          VALUES (?, ?, ?, 'completed', ?, ?)
+        `).run("cleanup_orphans", Date.now(), Date.now(), cleaned, JSON.stringify(orphansFound));
+
+        return {
+          success: true,
+          preview_only: false,
+          orphans_found: orphansFound,
+          total_orphans: totalOrphans,
+          cleaned,
+          message: `Cleaned ${cleaned} orphan(s)`,
+        };
+      });
+    } catch (error) {
+      return {
+        success: false,
+        preview_only: preview,
+        orphans_found: {
+          tags_without_items: 0,
+          embeddings_without_items: 0,
+          history_without_items: 0,
+          links_without_targets: 0,
+        },
+        total_orphans: 0,
+        cleaned: 0,
+        message: `Error cleaning orphans: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Get health report
+   */
+  async getHealthReport(args: Record<string, unknown>): Promise<Types.GetHealthReportResponse> {
+    const typedArgs = args as Types.GetHealthReportArgs;
+    const projectPath = this.resolveOptionalProjectPath(typedArgs.project_path);
+
+    try {
+      const checks: Types.HealthCheck[] = [];
+      let passed = 0;
+      let warnings = 0;
+      let failures = 0;
+
+      // Database size check
+      const stats = await this.getStorageStats({ detailed: false });
+      const sizeMB = stats.total_size_bytes / 1024 / 1024;
+      if (sizeMB > 500) {
+        checks.push({
+          name: "database_size",
+          status: "fail",
+          message: `Database size: ${stats.total_size_human}`,
+          details: "Database exceeds 500MB",
+          recommendation: "Run cleanup_stale and vacuum_database",
+        });
+        failures++;
+      } else if (sizeMB > 100) {
+        checks.push({
+          name: "database_size",
+          status: "warn",
+          message: `Database size: ${stats.total_size_human}`,
+          details: "Database exceeds 100MB",
+          recommendation: "Consider running cleanup_stale",
+        });
+        warnings++;
+      } else {
+        checks.push({
+          name: "database_size",
+          status: "pass",
+          message: `Database size: ${stats.total_size_human}`,
+          details: "Size is healthy",
+          recommendation: null,
+        });
+        passed++;
+      }
+
+      // Stale items check
+      const stale = await this.findStaleItems({ limit: 100, project_path: projectPath });
+      if (stale.total_stale > 50) {
+        checks.push({
+          name: "stale_items",
+          status: "warn",
+          message: `${stale.total_stale} stale items`,
+          details: "Many items haven't been accessed recently",
+          recommendation: "Review and cleanup stale items",
+        });
+        warnings++;
+      } else {
+        checks.push({
+          name: "stale_items",
+          status: "pass",
+          message: `${stale.total_stale} stale items`,
+          details: "Stale item count is acceptable",
+          recommendation: null,
+        });
+        passed++;
+      }
+
+      // Orphan check
+      const orphans = await this.cleanupOrphans({ preview: true });
+      if (orphans.total_orphans > 100) {
+        checks.push({
+          name: "orphans",
+          status: "warn",
+          message: `${orphans.total_orphans} orphaned records`,
+          details: "Many orphaned records found",
+          recommendation: "Run cleanup_orphans",
+        });
+        warnings++;
+      } else {
+        checks.push({
+          name: "orphans",
+          status: "pass",
+          message: `${orphans.total_orphans} orphaned records`,
+          details: "Orphan count is acceptable",
+          recommendation: null,
+        });
+        passed++;
+      }
+
+      // Calculate overall health
+      let overallHealth: "good" | "needs_attention" | "critical";
+      let score: number;
+      if (failures > 0) {
+        overallHealth = "critical";
+        score = Math.max(0, 50 - failures * 25);
+      } else if (warnings > 1) {
+        overallHealth = "needs_attention";
+        score = Math.max(50, 100 - warnings * 15);
+      } else {
+        overallHealth = "good";
+        score = 100 - warnings * 10;
+      }
+
+      const recommendations = checks
+        .filter((c) => c.recommendation)
+        .map((c) => c.recommendation as string);
+
+      // Get last maintenance
+      const lastMaint = this.db.prepare(
+        "SELECT MAX(completed_at) as ts FROM maintenance_log WHERE status = 'completed'"
+      ).get() as { ts: number | null };
+
+      return {
+        success: true,
+        overall_health: overallHealth,
+        score,
+        checks,
+        summary: { passed, warnings, failures },
+        recommendations,
+        last_maintenance: lastMaint.ts,
+        message: `Health: ${overallHealth} (score: ${score})`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        overall_health: "critical",
+        score: 0,
+        checks: [],
+        summary: { passed: 0, warnings: 0, failures: 1 },
+        recommendations: [],
+        last_maintenance: null,
+        message: `Error getting health report: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Run maintenance tasks
+   */
+  async runMaintenance(args: Record<string, unknown>): Promise<Types.RunMaintenanceResponse> {
+    const typedArgs = args as unknown as Types.RunMaintenanceArgs;
+    const { tasks, options = {}, preview = true } = typedArgs;
+
+    if (!tasks || tasks.length === 0) {
+      return {
+        success: false,
+        tasks_run: [],
+        total_duration_ms: 0,
+        overall_status: "failed",
+        log_id: 0,
+        message: "tasks array is required",
+      };
+    }
+
+    try {
+      const startTime = Date.now();
+      const tasksRun: Types.MaintenanceTaskResult[] = [];
+
+      for (const task of tasks) {
+        const taskStart = Date.now();
+        try {
+          let resultSummary = "";
+
+          switch (task) {
+            case "cleanup_stale": {
+              const result = await this.cleanupStale({
+                ...options,
+                action: preview ? "preview" : "archive",
+              });
+              resultSummary = result.message;
+              break;
+            }
+            case "cleanup_orphans": {
+              const result = await this.cleanupOrphans({ preview });
+              resultSummary = result.message;
+              break;
+            }
+            case "vacuum": {
+              if (!preview) {
+                const result = await this.vacuumDatabase(options);
+                resultSummary = result.message;
+              } else {
+                resultSummary = "Vacuum (preview mode - skipped)";
+              }
+              break;
+            }
+            case "find_duplicates": {
+              const result = await this.findDuplicates(options);
+              resultSummary = result.message;
+              break;
+            }
+            case "health_report": {
+              const result = await this.getHealthReport(options);
+              resultSummary = result.message;
+              break;
+            }
+            default:
+              resultSummary = "Unknown task";
+          }
+
+          tasksRun.push({
+            task,
+            status: "success",
+            duration_ms: Date.now() - taskStart,
+            result_summary: resultSummary,
+          });
+        } catch (taskError) {
+          tasksRun.push({
+            task,
+            status: "failed",
+            duration_ms: Date.now() - taskStart,
+            result_summary: (taskError as Error).message,
+          });
+        }
+      }
+
+      const totalDuration = Date.now() - startTime;
+      const failedCount = tasksRun.filter((t) => t.status === "failed").length;
+      const overallStatus = failedCount === 0 ? "success" : failedCount < tasks.length ? "partial" : "failed";
+
+      // Log to maintenance_log
+      const logResult = this.db.prepare(`
+        INSERT INTO maintenance_log (task_type, started_at, completed_at, status, items_processed, details)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        "run_maintenance",
+        startTime,
+        Date.now(),
+        overallStatus,
+        tasks.length,
+        JSON.stringify({ tasks, preview, results: tasksRun })
+      );
+
+      return {
+        success: true,
+        tasks_run: tasksRun,
+        total_duration_ms: totalDuration,
+        overall_status: overallStatus,
+        log_id: Number(logResult.lastInsertRowid),
+        message: `Completed ${tasksRun.length} task(s) in ${totalDuration}ms`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        tasks_run: [],
+        total_duration_ms: 0,
+        overall_status: "failed",
+        log_id: 0,
+        message: `Error running maintenance: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Get maintenance history
+   */
+  async getMaintenanceHistory(args: Record<string, unknown>): Promise<Types.GetMaintenanceHistoryResponse> {
+    const typedArgs = args as Types.GetMaintenanceHistoryArgs;
+    const { since, task_type, limit = 20 } = typedArgs;
+
+    try {
+      let query = "SELECT * FROM maintenance_log WHERE 1=1";
+      const params: unknown[] = [];
+
+      if (since) {
+        query += " AND started_at >= ?";
+        params.push(since);
+      }
+
+      if (task_type) {
+        query += " AND task_type = ?";
+        params.push(task_type);
+      }
+
+      query += " ORDER BY started_at DESC LIMIT ?";
+      params.push(limit);
+
+      const rows = this.db.prepare(query).all(...params) as Types.MaintenanceLogEntry[];
+
+      return {
+        success: true,
+        entries: rows,
+        total: rows.length,
+        message: `Found ${rows.length} maintenance log entr${rows.length === 1 ? "y" : "ies"}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        entries: [],
+        total: 0,
+        message: `Error getting maintenance history: ${(error as Error).message}`,
       };
     }
   }

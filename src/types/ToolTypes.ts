@@ -3,6 +3,22 @@
  * Replaces 'any' types with proper interfaces for type safety
  */
 
+// ==================== Scope Type Helpers ====================
+
+/**
+ * Standard scope type used across multiple tools
+ */
+export type Scope = 'current' | 'all' | 'global';
+
+/**
+ * Helper type to create scope-aware discriminated unions.
+ * When scope='current', conversation_id is required.
+ */
+export type WithScopeConversation<T> =
+  | (T & { scope: 'current'; conversation_id: string })
+  | (T & { scope?: 'all' | 'global'; conversation_id?: string })
+  | (T & { scope?: undefined; conversation_id?: string });
+
 // ==================== Tool Arguments ====================
 
 export interface IndexConversationsArgs {
@@ -14,14 +30,13 @@ export interface IndexConversationsArgs {
   exclude_mcp_servers?: string[];
 }
 
-export interface SearchConversationsArgs {
+interface SearchConversationsBaseArgs {
   query: string;
   limit?: number;
   offset?: number;
   date_range?: [number, number];
-  scope?: 'current' | 'all' | 'global';
-  conversation_id?: string; // For scope='current'
 }
+export type SearchConversationsArgs = WithScopeConversation<SearchConversationsBaseArgs>;
 
 export interface SearchProjectConversationsArgs {
   query: string;
@@ -33,14 +48,13 @@ export interface SearchProjectConversationsArgs {
   include_codex?: boolean;
 }
 
-export interface GetDecisionsArgs {
+interface GetDecisionsBaseArgs {
   query: string;
   file_path?: string;
   limit?: number;
   offset?: number;
-  scope?: 'current' | 'all' | 'global';
-  conversation_id?: string; // For scope='current'
 }
+export type GetDecisionsArgs = WithScopeConversation<GetDecisionsBaseArgs>;
 
 export interface CheckBeforeModifyArgs {
   file_path: string;
@@ -54,22 +68,20 @@ export interface GetFileEvolutionArgs {
   offset?: number;
 }
 
-export interface LinkCommitsToConversationsArgs {
+interface LinkCommitsToConversationsBaseArgs {
   query?: string;
-  conversation_id?: string;
   limit?: number;
   offset?: number;
-  scope?: 'current' | 'all' | 'global';
 }
+export type LinkCommitsToConversationsArgs = WithScopeConversation<LinkCommitsToConversationsBaseArgs>;
 
-export interface SearchMistakesArgs {
+interface SearchMistakesBaseArgs {
   query: string;
   mistake_type?: string;
   limit?: number;
   offset?: number;
-  scope?: 'current' | 'all' | 'global';
-  conversation_id?: string; // For scope='current'
 }
+export type SearchMistakesArgs = WithScopeConversation<SearchMistakesBaseArgs>;
 
 export interface GetRequirementsArgs {
   component: string;
@@ -88,13 +100,12 @@ export interface GetToolHistoryArgs {
   errors_only?: boolean;
 }
 
-export interface FindSimilarSessionsArgs {
+interface FindSimilarSessionsBaseArgs {
   query: string;
   limit?: number;
   offset?: number;
-  scope?: 'current' | 'all' | 'global';
-  conversation_id?: string; // For scope='current'
 }
+export type FindSimilarSessionsArgs = WithScopeConversation<FindSimilarSessionsBaseArgs>;
 
 export interface GenerateDocumentationArgs {
   project_path?: string;
@@ -336,16 +347,15 @@ export interface FindSimilarSessionsResponse {
   scope: 'current' | 'all' | 'global';
 }
 
-export interface RecallAndApplyArgs {
+interface RecallAndApplyBaseArgs {
   query: string;
   context_types?: Array<"conversations" | "decisions" | "mistakes" | "file_changes" | "commits">;
   file_path?: string;
   date_range?: [number, number];
   limit?: number;
   offset?: number;
-  scope?: 'current' | 'all' | 'global';
-  conversation_id?: string; // For scope='current'
 }
+export type RecallAndApplyArgs = WithScopeConversation<RecallAndApplyBaseArgs>;
 
 export interface RecalledContext {
   conversations?: Array<{
@@ -796,11 +806,24 @@ export interface MemoryItem {
   created_at: string;
   updated_at: string;
   expires_at?: string;
+  // Phase 1: Memory Confidence fields
+  confidence?: string;
+  importance?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  archive_reason?: string;
+  source?: string;
+  source_session_id?: string;
+  verified_at?: string;
+  verified_by?: string;
 }
 
 export interface MemoryItemWithSimilarity extends MemoryItem {
   similarity: number;
 }
+
+export type ConfidenceLevel = "uncertain" | "likely" | "confirmed" | "verified";
+export type ImportanceLevel = "low" | "normal" | "high" | "critical";
 
 export interface RememberArgs {
   key: string;
@@ -808,6 +831,10 @@ export interface RememberArgs {
   context?: string;
   tags?: string[];
   ttl?: number;
+  confidence?: ConfidenceLevel;
+  importance?: ImportanceLevel;
+  source?: string;
+  pinned?: boolean;
   project_path?: string;
 }
 
@@ -997,5 +1024,515 @@ export interface InjectRelevantContextResponse {
   injected_context: string;
   sources_used: string[];
   token_count: number;
+  message: string;
+}
+
+// ==================== Phase 1: Tag Management Types ====================
+
+export type TagItemType = "memory" | "decision" | "pattern" | "session" | "mistake";
+export type TagScope = "project" | "global" | "all";
+export type TagSortBy = "name" | "usage_count" | "last_used" | "created";
+
+export interface TagInfo {
+  id: number;
+  name: string;
+  project_path: string | null;
+  description: string | null;
+  color: string | null;
+  usage_count: number;
+  last_used_at: number | null;
+  used_in_types: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ListTagsArgs {
+  project_path?: string;
+  scope?: TagScope;
+  sort_by?: TagSortBy;
+  include_unused?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListTagsResponse {
+  success: boolean;
+  tags: TagInfo[];
+  total: number;
+  hasMore: boolean;
+  message: string;
+}
+
+export interface SearchByTagsArgs {
+  tags: string[];
+  match_mode?: "all" | "any";
+  item_types?: TagItemType[];
+  scope?: TagScope;
+  project_path?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TaggedItem {
+  item_type: TagItemType;
+  item_id: number;
+  item_summary: string;
+  matched_tags: string[];
+  all_tags: string[];
+  created_at: number;
+}
+
+export interface SearchByTagsResponse {
+  success: boolean;
+  items: TaggedItem[];
+  total: number;
+  hasMore: boolean;
+  tag_breakdown: Record<string, number>;
+  message: string;
+}
+
+export interface RenameTagArgs {
+  old_name: string;
+  new_name: string;
+  scope?: "project" | "global";
+  project_path?: string;
+}
+
+export interface RenameTagResponse {
+  success: boolean;
+  old_name: string;
+  new_name: string;
+  items_affected: number;
+  merged: boolean;
+  message: string;
+}
+
+export interface MergeTagsArgs {
+  source_tags: string[];
+  target_tag: string;
+  scope?: "project" | "global";
+  project_path?: string;
+}
+
+export interface MergeTagsResponse {
+  success: boolean;
+  merged_tags: string[];
+  target_tag: string;
+  items_retagged: number;
+  duplicates_removed: number;
+  message: string;
+}
+
+export interface DeleteTagArgs {
+  name: string;
+  scope?: "project" | "global";
+  project_path?: string;
+  force?: boolean;
+}
+
+export interface DeleteTagResponse {
+  success: boolean;
+  deleted: boolean;
+  items_untagged: number;
+  message: string;
+}
+
+export interface TagItemArgs {
+  item_type: TagItemType;
+  item_id: number | string;
+  tags: string[];
+  project_path?: string;
+}
+
+export interface TagItemResponse {
+  success: boolean;
+  item_type: TagItemType;
+  item_id: number | string;
+  tags_added: string[];
+  tags_existed: string[];
+  message: string;
+}
+
+export interface UntagItemArgs {
+  item_type: TagItemType;
+  item_id: number | string;
+  tags?: string[];
+  project_path?: string;
+}
+
+export interface UntagItemResponse {
+  success: boolean;
+  item_type: TagItemType;
+  item_id: number | string;
+  tags_removed: string[];
+  message: string;
+}
+
+// ==================== Phase 1: Memory Confidence Types ====================
+
+export interface SetMemoryConfidenceArgs {
+  key: string;
+  confidence: ConfidenceLevel;
+  evidence?: string;
+  verified_by?: string;
+  project_path?: string;
+}
+
+export interface SetMemoryConfidenceResponse {
+  success: boolean;
+  key: string;
+  previous_confidence: string | null;
+  new_confidence: string;
+  verified_at: number | null;
+  message: string;
+}
+
+export interface SetMemoryImportanceArgs {
+  key: string;
+  importance: ImportanceLevel;
+  project_path?: string;
+}
+
+export interface SetMemoryImportanceResponse {
+  success: boolean;
+  key: string;
+  previous_importance: string | null;
+  new_importance: string;
+  message: string;
+}
+
+export interface PinMemoryArgs {
+  key: string;
+  pinned?: boolean;
+  project_path?: string;
+}
+
+export interface PinMemoryResponse {
+  success: boolean;
+  key: string;
+  pinned: boolean;
+  message: string;
+}
+
+export interface ArchiveMemoryArgs {
+  key: string;
+  reason?: string;
+  project_path?: string;
+}
+
+export interface ArchiveMemoryResponse {
+  success: boolean;
+  key: string;
+  archived: boolean;
+  reason: string | null;
+  message: string;
+}
+
+export interface UnarchiveMemoryArgs {
+  key: string;
+  project_path?: string;
+}
+
+export interface UnarchiveMemoryResponse {
+  success: boolean;
+  key: string;
+  message: string;
+}
+
+export interface SearchMemoryByQualityArgs {
+  query?: string;
+  confidence?: ConfidenceLevel[];
+  importance?: ImportanceLevel[];
+  pinned_only?: boolean;
+  include_archived?: boolean;
+  scope?: "project" | "global";
+  project_path?: string;
+  sort_by?: "relevance" | "importance" | "confidence" | "recent";
+  limit?: number;
+  offset?: number;
+}
+
+export interface SearchMemoryByQualityResponse {
+  success: boolean;
+  items: MemoryItem[];
+  total: number;
+  hasMore: boolean;
+  message: string;
+}
+
+export interface GetMemoryStatsArgs {
+  project_path?: string;
+  scope?: "project" | "global";
+}
+
+export interface GetMemoryStatsResponse {
+  success: boolean;
+  total: number;
+  active: number;
+  archived: number;
+  pinned: number;
+  by_confidence: {
+    uncertain: number;
+    likely: number;
+    confirmed: number;
+    verified: number;
+  };
+  by_importance: {
+    low: number;
+    normal: number;
+    high: number;
+    critical: number;
+  };
+  expired: number;
+  expiring_soon: number;
+  top_tags: Array<{ tag: string; count: number }>;
+  message: string;
+}
+
+// ==================== Phase 1: Cleanup/Maintenance Types ====================
+
+export interface GetStorageStatsArgs {
+  project_path?: string;
+  detailed?: boolean;
+}
+
+export interface StorageTypeStats {
+  count: number;
+  size_bytes: number;
+}
+
+export interface GetStorageStatsResponse {
+  success: boolean;
+  database_path: string;
+  total_size_bytes: number;
+  total_size_human: string;
+  by_type: {
+    conversations: StorageTypeStats;
+    messages: StorageTypeStats;
+    decisions: StorageTypeStats;
+    mistakes: StorageTypeStats;
+    patterns: StorageTypeStats;
+    memories: StorageTypeStats;
+    learnings: StorageTypeStats;
+    embeddings: StorageTypeStats;
+    history: StorageTypeStats;
+  };
+  by_project?: Array<{
+    project_path: string;
+    size_bytes: number;
+    item_count: number;
+  }>;
+  oldest_item: number;
+  newest_item: number;
+  fragmentation_percent: number;
+  recommendations: string[];
+  message: string;
+}
+
+export interface FindStaleItemsArgs {
+  item_types?: Array<"memory" | "decision" | "pattern" | "session">;
+  stale_threshold_days?: number;
+  exclude_pinned?: boolean;
+  exclude_important?: boolean;
+  project_path?: string;
+  limit?: number;
+}
+
+export interface StaleItem {
+  item_type: string;
+  item_id: number;
+  identifier: string;
+  last_accessed: number;
+  days_stale: number;
+  importance: string;
+  size_estimate: number;
+}
+
+export interface FindStaleItemsResponse {
+  success: boolean;
+  stale_items: StaleItem[];
+  total_stale: number;
+  total_size_bytes: number;
+  by_type: Record<string, number>;
+  message: string;
+}
+
+export interface FindDuplicatesArgs {
+  item_types?: Array<"memory" | "decision" | "pattern">;
+  similarity_threshold?: number;
+  project_path?: string;
+  limit?: number;
+}
+
+export interface DuplicateItem {
+  id: number;
+  identifier: string;
+  content_preview: string;
+  created_at: number;
+  importance: string;
+}
+
+export interface DuplicateGroup {
+  group_id: number;
+  item_type: string;
+  items: DuplicateItem[];
+  similarity_score: number;
+  recommended_keep: number;
+  recommendation_reason: string;
+}
+
+export interface FindDuplicatesResponse {
+  success: boolean;
+  duplicate_groups: DuplicateGroup[];
+  total_groups: number;
+  potential_savings: number;
+  message: string;
+}
+
+export interface MergeDuplicatesArgs {
+  item_type: "memory" | "decision" | "pattern";
+  keep_id: number;
+  merge_ids: number[];
+  merge_strategy?: "keep_content" | "combine_content" | "keep_newest";
+  merge_tags?: boolean;
+}
+
+export interface MergeDuplicatesResponse {
+  success: boolean;
+  kept_id: number;
+  merged_count: number;
+  tags_merged: string[];
+  references_updated: number;
+  message: string;
+}
+
+export interface CleanupStaleArgs {
+  item_types?: string[];
+  stale_threshold_days?: number;
+  action?: "archive" | "delete" | "preview";
+  exclude_pinned?: boolean;
+  exclude_important?: boolean;
+  max_items?: number;
+  project_path?: string;
+}
+
+export interface CleanupStaleResponse {
+  success: boolean;
+  action: string;
+  preview_only: boolean;
+  items_affected: number;
+  by_type: Record<string, number>;
+  space_freed_bytes: number;
+  items: Array<{
+    type: string;
+    id: number;
+    identifier: string;
+  }>;
+  message: string;
+}
+
+export interface VacuumDatabaseArgs {
+  analyze?: boolean;
+  reindex?: boolean;
+}
+
+export interface VacuumDatabaseResponse {
+  success: boolean;
+  size_before: number;
+  size_after: number;
+  space_freed: number;
+  duration_ms: number;
+  message: string;
+}
+
+export interface CleanupOrphansArgs {
+  preview?: boolean;
+}
+
+export interface CleanupOrphansResponse {
+  success: boolean;
+  preview_only: boolean;
+  orphans_found: {
+    tags_without_items: number;
+    embeddings_without_items: number;
+    history_without_items: number;
+    links_without_targets: number;
+  };
+  total_orphans: number;
+  cleaned: number;
+  message: string;
+}
+
+export interface HealthCheck {
+  name: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+  details: string;
+  recommendation: string | null;
+}
+
+export interface GetHealthReportArgs {
+  project_path?: string;
+}
+
+export interface GetHealthReportResponse {
+  success: boolean;
+  overall_health: "good" | "needs_attention" | "critical";
+  score: number;
+  checks: HealthCheck[];
+  summary: {
+    passed: number;
+    warnings: number;
+    failures: number;
+  };
+  recommendations: string[];
+  last_maintenance: number | null;
+  message: string;
+}
+
+export interface RunMaintenanceArgs {
+  tasks: Array<"cleanup_stale" | "cleanup_orphans" | "vacuum" | "find_duplicates" | "health_report" | "cleanup_expired">;
+  options?: Record<string, unknown>;
+  preview?: boolean;
+}
+
+export interface MaintenanceTaskResult {
+  task: string;
+  status: "success" | "failed" | "skipped";
+  duration_ms: number;
+  result_summary: string;
+}
+
+export interface RunMaintenanceResponse {
+  success: boolean;
+  tasks_run: MaintenanceTaskResult[];
+  total_duration_ms: number;
+  overall_status: "success" | "partial" | "failed";
+  log_id: number;
+  message: string;
+}
+
+export interface GetMaintenanceHistoryArgs {
+  since?: number;
+  task_type?: string;
+  limit?: number;
+}
+
+export interface MaintenanceLogEntry {
+  id: number;
+  task_type: string;
+  started_at: number;
+  completed_at: number | null;
+  status: "running" | "completed" | "failed";
+  items_processed: number;
+  items_affected: number;
+  details: string | null;
+  error_message: string | null;
+}
+
+export interface GetMaintenanceHistoryResponse {
+  success: boolean;
+  entries: MaintenanceLogEntry[];
+  total: number;
   message: string;
 }

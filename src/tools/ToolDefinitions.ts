@@ -78,6 +78,12 @@ export const TOOLS = {
         },
       },
       required: ["query"],
+      if: {
+        properties: { scope: { const: "current" } },
+      },
+      then: {
+        required: ["conversation_id"],
+      },
     },
   },
 
@@ -161,6 +167,12 @@ export const TOOLS = {
         },
       },
       required: ["query"],
+      if: {
+        properties: { scope: { const: "current" } },
+      },
+      then: {
+        required: ["conversation_id"],
+      },
     },
   },
 
@@ -285,6 +297,12 @@ export const TOOLS = {
         },
       },
       required: ["query"],
+      if: {
+        properties: { scope: { const: "current" } },
+      },
+      then: {
+        required: ["conversation_id"],
+      },
     },
   },
 
@@ -396,6 +414,12 @@ export const TOOLS = {
         },
       },
       required: ["query"],
+      if: {
+        properties: { scope: { const: "current" } },
+      },
+      then: {
+        required: ["conversation_id"],
+      },
     },
   },
 
@@ -449,6 +473,12 @@ export const TOOLS = {
         },
       },
       required: ["query"],
+      if: {
+        properties: { scope: { const: "current" } },
+      },
+      then: {
+        required: ["conversation_id"],
+      },
     },
   },
 
@@ -781,7 +811,7 @@ export const TOOLS = {
   remember: {
     name: "remember",
     description:
-      "Store a fact, decision, or piece of context in working memory. Use this to remember important information that should persist across conversation boundaries. Items are stored per-project and can be recalled by key or searched semantically.",
+      "Store a fact, decision, or piece of context in working memory. Use this to remember important information that should persist across conversation boundaries. Items are stored per-project and can be recalled by key or searched semantically. Supports confidence levels, importance ratings, and source attribution.",
     inputSchema: {
       type: "object",
       properties: {
@@ -810,6 +840,30 @@ export const TOOLS = {
           type: "number",
           description:
             "Optional time-to-live in seconds. Memory will auto-expire after this time.",
+        },
+        confidence: {
+          type: "string",
+          enum: ["uncertain", "likely", "confirmed", "verified"],
+          description:
+            "Confidence level: uncertain (hypothesis), likely (probably correct, default), confirmed (tested), verified (proven in production)",
+          default: "likely",
+        },
+        importance: {
+          type: "string",
+          enum: ["low", "normal", "high", "critical"],
+          description:
+            "Importance level: low (nice to know), normal (default), high (important), critical (must not forget)",
+          default: "normal",
+        },
+        source: {
+          type: "string",
+          description:
+            "Where this information came from (e.g., 'user stated', 'extracted from docs', 'confirmed in testing')",
+        },
+        pinned: {
+          type: "boolean",
+          description: "Pin this memory to prevent accidental deletion (default: false)",
+          default: false,
         },
         project_path: {
           type: "string",
@@ -1071,6 +1125,761 @@ export const TOOLS = {
         },
       },
       required: ["message"],
+    },
+  },
+
+  // ==================== Phase 1: Tag Management Tools ====================
+
+  list_tags: {
+    name: "list_tags",
+    description:
+      "List all tags with usage statistics. Shows how many items use each tag and what types of items they're applied to.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Filter to specific project (defaults to current)",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global", "all"],
+          description: "Tag scope filter: project (current project only), global (project-independent tags), all (both)",
+          default: "all",
+        },
+        sort_by: {
+          type: "string",
+          enum: ["name", "usage_count", "last_used", "created"],
+          description: "Sort order for tags",
+          default: "usage_count",
+        },
+        include_unused: {
+          type: "boolean",
+          description: "Include tags with zero usage (default: false)",
+          default: false,
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of tags to return (default: 50)",
+          default: 50,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N tags for pagination (default: 0)",
+          default: 0,
+        },
+      },
+    },
+  },
+
+  search_by_tags: {
+    name: "search_by_tags",
+    description:
+      "Find items across all entity types (memories, decisions, patterns, sessions, mistakes) by tag. Supports AND/OR matching modes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description: "Tags to search for",
+        },
+        match_mode: {
+          type: "string",
+          enum: ["all", "any"],
+          description: "Match mode: 'all' (AND - item must have all tags), 'any' (OR - item has at least one tag)",
+          default: "any",
+        },
+        item_types: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["memory", "decision", "pattern", "session", "mistake"],
+          },
+          description: "Filter to specific item types (default: all types)",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global", "all"],
+          description: "Search scope",
+          default: "all",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default: 20)",
+          default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0)",
+          default: 0,
+        },
+      },
+      required: ["tags"],
+    },
+  },
+
+  rename_tag: {
+    name: "rename_tag",
+    description:
+      "Rename a tag across all usages. If the new name already exists, items will be merged into the existing tag.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        old_name: {
+          type: "string",
+          description: "Current tag name",
+        },
+        new_name: {
+          type: "string",
+          description: "New tag name",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Tag scope to rename within",
+          default: "project",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (required for project scope)",
+        },
+      },
+      required: ["old_name", "new_name"],
+    },
+  },
+
+  merge_tags: {
+    name: "merge_tags",
+    description:
+      "Combine multiple tags into one. Source tags will be deleted and all their items will be retagged with the target tag.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_tags: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description: "Tags to merge from (will be deleted)",
+        },
+        target_tag: {
+          type: "string",
+          description: "Tag to merge into (will be kept or created)",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Tag scope",
+          default: "project",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (required for project scope)",
+        },
+      },
+      required: ["source_tags", "target_tag"],
+    },
+  },
+
+  delete_tag: {
+    name: "delete_tag",
+    description:
+      "Remove a tag entirely. By default, refuses to delete tags with usages unless force=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Tag name to delete",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Tag scope",
+          default: "project",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (required for project scope)",
+        },
+        force: {
+          type: "boolean",
+          description: "Delete even if tag has usages (default: false)",
+          default: false,
+        },
+      },
+      required: ["name"],
+    },
+  },
+
+  tag_item: {
+    name: "tag_item",
+    description:
+      "Add tags to any item type (memory, decision, pattern, session, mistake). Creates tags if they don't exist.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_type: {
+          type: "string",
+          enum: ["memory", "decision", "pattern", "session", "mistake"],
+          description: "Type of item to tag",
+        },
+        item_id: {
+          type: ["number", "string"],
+          description: "Item ID (number) or key (string for memory)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description: "Tags to add",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["item_type", "item_id", "tags"],
+    },
+  },
+
+  untag_item: {
+    name: "untag_item",
+    description:
+      "Remove tags from an item. If no tags specified, removes all tags from the item.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_type: {
+          type: "string",
+          enum: ["memory", "decision", "pattern", "session", "mistake"],
+          description: "Type of item to untag",
+        },
+        item_id: {
+          type: ["number", "string"],
+          description: "Item ID (number) or key (string for memory)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags to remove (omit to remove all tags)",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["item_type", "item_id"],
+    },
+  },
+
+  // ==================== Phase 1: Memory Confidence Tools ====================
+
+  set_memory_confidence: {
+    name: "set_memory_confidence",
+    description:
+      "Update the confidence level of a memory. Use this when you've validated or invalidated information.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Memory key to update",
+        },
+        confidence: {
+          type: "string",
+          enum: ["uncertain", "likely", "confirmed", "verified"],
+          description: "New confidence level",
+        },
+        evidence: {
+          type: "string",
+          description: "Why this confidence level (e.g., 'tested in production', 'user confirmed')",
+        },
+        verified_by: {
+          type: "string",
+          description: "Who/what verified (for confirmed/verified levels)",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key", "confidence"],
+    },
+  },
+
+  set_memory_importance: {
+    name: "set_memory_importance",
+    description:
+      "Update the importance level of a memory. Critical memories are exempt from auto-cleanup.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Memory key to update",
+        },
+        importance: {
+          type: "string",
+          enum: ["low", "normal", "high", "critical"],
+          description: "New importance level",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key", "importance"],
+    },
+  },
+
+  pin_memory: {
+    name: "pin_memory",
+    description:
+      "Pin or unpin a memory. Pinned memories are protected from accidental deletion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Memory key to pin/unpin",
+        },
+        pinned: {
+          type: "boolean",
+          description: "Whether to pin (true) or unpin (false)",
+          default: true,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key"],
+    },
+  },
+
+  archive_memory: {
+    name: "archive_memory",
+    description:
+      "Archive a memory. Archived memories are hidden from normal searches but can be restored.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Memory key to archive",
+        },
+        reason: {
+          type: "string",
+          description: "Why archiving this memory (e.g., 'outdated', 'no longer relevant')",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key"],
+    },
+  },
+
+  unarchive_memory: {
+    name: "unarchive_memory",
+    description: "Restore an archived memory back to active status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Memory key to unarchive",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+      required: ["key"],
+    },
+  },
+
+  search_memory_by_quality: {
+    name: "search_memory_by_quality",
+    description:
+      "Find memories filtered by confidence level, importance, pinned status, and archive status. Useful for finding high-confidence facts or reviewing low-confidence items.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional text search within filtered memories",
+        },
+        confidence: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["uncertain", "likely", "confirmed", "verified"],
+          },
+          description: "Filter by confidence levels (returns memories matching any level)",
+        },
+        importance: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["low", "normal", "high", "critical"],
+          },
+          description: "Filter by importance levels (returns memories matching any level)",
+        },
+        pinned_only: {
+          type: "boolean",
+          description: "Only return pinned memories (default: false)",
+          default: false,
+        },
+        include_archived: {
+          type: "boolean",
+          description: "Include archived memories (default: false)",
+          default: false,
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Search scope",
+          default: "project",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        sort_by: {
+          type: "string",
+          enum: ["relevance", "importance", "confidence", "recent"],
+          description: "Sort order",
+          default: "importance",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default: 20)",
+          default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Skip N results for pagination (default: 0)",
+          default: 0,
+        },
+      },
+    },
+  },
+
+  get_memory_stats: {
+    name: "get_memory_stats",
+    description:
+      "Get statistics about memories: counts by confidence level, importance, archived/pinned status, and tag distribution.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Stats scope",
+          default: "project",
+        },
+      },
+    },
+  },
+
+  // ==================== Phase 1: Cleanup/Maintenance Tools ====================
+
+  get_storage_stats: {
+    name: "get_storage_stats",
+    description:
+      "Get storage statistics: database size, record counts by type, fragmentation level, and recommendations.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Specific project to analyze (omit for all projects)",
+        },
+        detailed: {
+          type: "boolean",
+          description: "Include per-table size breakdown (default: false)",
+          default: false,
+        },
+      },
+    },
+  },
+
+  find_stale_items: {
+    name: "find_stale_items",
+    description:
+      "Find items that haven't been accessed or updated recently. Useful for cleanup planning.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_types: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["memory", "decision", "pattern", "session"],
+          },
+          description: "Types of items to check (default: memory, decision, pattern)",
+          default: ["memory", "decision", "pattern"],
+        },
+        stale_threshold_days: {
+          type: "number",
+          description: "Days since last access/update to consider stale (default: 90)",
+          default: 90,
+        },
+        exclude_pinned: {
+          type: "boolean",
+          description: "Exclude pinned items (default: true)",
+          default: true,
+        },
+        exclude_important: {
+          type: "boolean",
+          description: "Exclude high/critical importance items (default: true)",
+          default: true,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum items to return (default: 50)",
+          default: 50,
+        },
+      },
+    },
+  },
+
+  find_duplicates: {
+    name: "find_duplicates",
+    description:
+      "Find similar or duplicate items using semantic similarity. Returns groups of duplicates with recommendations on which to keep.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_types: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["memory", "decision", "pattern"],
+          },
+          description: "Types of items to check (default: memory, decision)",
+          default: ["memory", "decision"],
+        },
+        similarity_threshold: {
+          type: "number",
+          minimum: 0.5,
+          maximum: 1.0,
+          description: "Semantic similarity threshold (0.5-1.0, default: 0.85)",
+          default: 0.85,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum duplicate groups to return (default: 20)",
+          default: 20,
+        },
+      },
+    },
+  },
+
+  merge_duplicates: {
+    name: "merge_duplicates",
+    description:
+      "Merge duplicate items into one. Optionally combines content and tags from merged items.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_type: {
+          type: "string",
+          enum: ["memory", "decision", "pattern"],
+          description: "Type of items to merge",
+        },
+        keep_id: {
+          type: "number",
+          description: "ID of the item to keep",
+        },
+        merge_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "IDs of items to merge into keep_id (will be deleted)",
+        },
+        merge_strategy: {
+          type: "string",
+          enum: ["keep_content", "combine_content", "keep_newest"],
+          description: "How to handle content: keep_content (keep keep_id content), combine_content (merge all), keep_newest (use most recent)",
+          default: "keep_content",
+        },
+        merge_tags: {
+          type: "boolean",
+          description: "Combine tags from all items (default: true)",
+          default: true,
+        },
+      },
+      required: ["item_type", "keep_id", "merge_ids"],
+    },
+  },
+
+  cleanup_stale: {
+    name: "cleanup_stale",
+    description:
+      "Remove or archive stale items. Use preview mode first to see what would be affected.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_types: {
+          type: "array",
+          items: { type: "string" },
+          description: "Types of items to clean up",
+        },
+        stale_threshold_days: {
+          type: "number",
+          description: "Days threshold (default: 90)",
+          default: 90,
+        },
+        action: {
+          type: "string",
+          enum: ["archive", "delete", "preview"],
+          description: "Action to take: preview (show what would happen), archive (soft remove), delete (permanent)",
+          default: "preview",
+        },
+        exclude_pinned: {
+          type: "boolean",
+          description: "Exclude pinned items (default: true)",
+          default: true,
+        },
+        exclude_important: {
+          type: "boolean",
+          description: "Exclude high/critical importance items (default: true)",
+          default: true,
+        },
+        max_items: {
+          type: "number",
+          description: "Safety limit on items to process (default: 100)",
+          default: 100,
+        },
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  vacuum_database: {
+    name: "vacuum_database",
+    description:
+      "Reclaim disk space and optimize the database. Run after bulk deletions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        analyze: {
+          type: "boolean",
+          description: "Run ANALYZE after VACUUM to update query planner statistics (default: true)",
+          default: true,
+        },
+        reindex: {
+          type: "boolean",
+          description: "Rebuild all indexes (default: false)",
+          default: false,
+        },
+      },
+    },
+  },
+
+  cleanup_orphans: {
+    name: "cleanup_orphans",
+    description:
+      "Find and optionally remove orphaned records (tags without items, embeddings without sources, etc.).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        preview: {
+          type: "boolean",
+          description: "Only show what would be cleaned (default: true)",
+          default: true,
+        },
+      },
+    },
+  },
+
+  get_health_report: {
+    name: "get_health_report",
+    description:
+      "Run comprehensive health checks on the database and memory system. Returns overall health score and recommendations.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Project path (defaults to current working directory)",
+        },
+      },
+    },
+  },
+
+  run_maintenance: {
+    name: "run_maintenance",
+    description:
+      "Run one or more maintenance tasks. Use preview mode to see what would happen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tasks: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["cleanup_stale", "cleanup_orphans", "vacuum", "find_duplicates", "health_report", "cleanup_expired"],
+          },
+          description: "Tasks to run",
+        },
+        options: {
+          type: "object",
+          description: "Task-specific options (e.g., stale_threshold_days for cleanup_stale)",
+        },
+        preview: {
+          type: "boolean",
+          description: "Preview mode - show what would happen without making changes (default: true)",
+          default: true,
+        },
+      },
+      required: ["tasks"],
+    },
+  },
+
+  get_maintenance_history: {
+    name: "get_maintenance_history",
+    description: "View history of past maintenance operations.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: {
+          type: "number",
+          description: "Only show operations since this timestamp",
+        },
+        task_type: {
+          type: "string",
+          description: "Filter by task type",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum records to return (default: 20)",
+          default: 20,
+        },
+      },
     },
   },
 };
