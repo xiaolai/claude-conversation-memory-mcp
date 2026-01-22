@@ -74,6 +74,11 @@ No manual action required - the migration happens on first run.
 - **Cross-project search** - Search across all your projects globally
 - **Project migration** - Keep history when renaming/moving projects
 - **Semantic search** - Uses Transformers.js embeddings (bundled, works offline)
+- **Working memory** - Store and recall facts, decisions, and context across sessions
+- **Session handoff** - Seamless context transfer between conversations
+- **Tag management** - Organize memories, decisions, and patterns with tags
+- **Memory quality** - Track confidence, importance, and verification status
+- **Database maintenance** - Find duplicates, clean stale data, health reports
 
 ## Installation
 
@@ -289,6 +294,64 @@ Set `OPENAI_API_KEY` environment variable.
 | `migrate_project` | Migrate/merge conversation history |
 | `forget_by_topic` | Delete conversations by keyword |
 | `generate_documentation` | Generate docs from local code scan + conversations |
+
+### Working Memory
+| Tool | Description |
+|------|-------------|
+| `remember` | Store a fact, decision, or context with optional TTL |
+| `recall` | Retrieve a specific memory by key |
+| `recall_relevant` | Semantic search across stored memories |
+| `list_memory` | List all memories, optionally filtered by tags |
+| `forget` | Remove a memory by key |
+
+### Session Handoff
+| Tool | Description |
+|------|-------------|
+| `prepare_handoff` | Create handoff document for session transition |
+| `resume_from_handoff` | Resume work from a previous handoff |
+| `list_handoffs` | List available handoff documents |
+
+### Context Injection
+| Tool | Description |
+|------|-------------|
+| `get_startup_context` | Get relevant context at conversation start |
+| `inject_relevant_context` | Auto-inject context based on user message |
+
+### Tag Management
+| Tool | Description |
+|------|-------------|
+| `list_tags` | List all tags with usage statistics |
+| `search_by_tags` | Find items by tag (memories, decisions, patterns) |
+| `rename_tag` | Rename a tag across all items |
+| `merge_tags` | Merge multiple tags into one |
+| `delete_tag` | Delete a tag and unlink all items |
+| `tag_item` | Add tags to an item |
+| `untag_item` | Remove tags from an item |
+
+### Memory Quality
+| Tool | Description |
+|------|-------------|
+| `set_memory_confidence` | Set confidence level (uncertain/likely/confirmed/verified) |
+| `set_memory_importance` | Set importance level (low/normal/high/critical) |
+| `pin_memory` | Pin a memory to prevent cleanup |
+| `archive_memory` | Archive a memory with optional reason |
+| `unarchive_memory` | Restore an archived memory |
+| `search_memory_by_quality` | Search memories by confidence/importance |
+| `get_memory_stats` | Get memory statistics by confidence/importance |
+
+### Maintenance
+| Tool | Description |
+|------|-------------|
+| `get_storage_stats` | Database size and item counts |
+| `find_stale_items` | Find items not accessed recently |
+| `find_duplicates` | Find similar/duplicate items |
+| `merge_duplicates` | Merge duplicate items |
+| `cleanup_stale` | Archive or delete stale items |
+| `vacuum_database` | Reclaim disk space |
+| `cleanup_orphans` | Remove orphaned records |
+| `get_health_report` | Overall database health check |
+| `run_maintenance` | Run multiple maintenance tasks |
+| `get_maintenance_history` | View past maintenance operations |
 
 ### Session IDs
 
