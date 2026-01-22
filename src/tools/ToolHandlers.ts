@@ -4374,7 +4374,7 @@ export class ToolHandlers {
         let duplicatesRemoved = 0;
 
         for (const sourceTag of sourceTagRows) {
-          if (sourceTag.id === targetTagId) continue;
+          if (sourceTag.id === targetTagId) {continue;}
 
           // Count items before
           const countBefore = this.db.prepare(
@@ -5213,9 +5213,9 @@ export class ToolHandlers {
 
       // Format size
       const formatSize = (bytes: number): string => {
-        if (bytes < 1024) return `${bytes} B`;
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-        if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+        if (bytes < 1024) {return `${bytes} B`;}
+        if (bytes < 1024 * 1024) {return `${(bytes / 1024).toFixed(1)} KB`;}
+        if (bytes < 1024 * 1024 * 1024) {return `${(bytes / 1024 / 1024).toFixed(1)} MB`;}
         return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
       };
 
@@ -5425,7 +5425,7 @@ export class ToolHandlers {
             const sorted = [...group].sort((a, b) => {
               const impOrder: Record<string, number> = { critical: 1, high: 2, normal: 3, low: 4 };
               const impDiff = (impOrder[a.importance || "normal"] || 3) - (impOrder[b.importance || "normal"] || 3);
-              if (impDiff !== 0) return impDiff;
+              if (impDiff !== 0) {return impDiff;}
               return b.created_at - a.created_at;
             });
 
