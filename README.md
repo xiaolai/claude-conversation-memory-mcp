@@ -4,70 +4,40 @@ An MCP server that gives Claude long-term memory by indexing conversation histor
 
 ---
 
-## ⚠️ Breaking Changes in v1.8.0
+## What's New in v2.0
 
-**This package has been renamed from `claude-conversation-memory-mcp` to `cccmemory`.**
+Version 2.0 brings major improvements to search quality and accuracy:
 
-If you were using the old package, follow these migration steps:
+- **Smart Chunking** - Long messages are now split at sentence boundaries, ensuring full content is searchable (previously truncated at 512 tokens)
+- **Hybrid Search** - Combines semantic search with full-text search using Reciprocal Rank Fusion (RRF) for better ranking
+- **Dynamic Thresholds** - Similarity thresholds adjust based on query length for better precision
+- **Improved Snippets** - Search results highlight matching terms in context
+- **Extraction Validation** - Reduces false positives in decision/mistake detection
+- **Query Expansion** - Optional synonym expansion for broader recall (disabled by default)
 
-### 1. Uninstall the old package
+---
 
-```bash
-npm uninstall -g claude-conversation-memory-mcp
-```
+<details>
+<summary><strong>⚠️ Breaking Changes in v1.8.0</strong> (click to expand)</summary>
 
-### 2. Install the new package
+**This package was renamed from `claude-conversation-memory-mcp` to `cccmemory`.**
 
-```bash
-npm install -g cccmemory
-```
+If upgrading from the old package:
 
-### 3. Update your MCP configuration
+1. Uninstall old package: `npm uninstall -g claude-conversation-memory-mcp`
+2. Install new package: `npm install -g cccmemory`
+3. Update MCP config to use `cccmemory` command
+4. Database migration is automatic (`.claude-conversations-memory.db` → `.cccmemory.db`)
 
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "cccmemory": {
-      "command": "npx",
-      "args": ["-y", "cccmemory"]
-    }
-  }
-}
-```
-
-**Claude Code** (`~/.claude.json`):
-```json
-{
-  "mcpServers": {
-    "cccmemory": {
-      "command": "npx",
-      "args": ["-y", "cccmemory"]
-    }
-  }
-}
-```
-
-**Codex** (`~/.codex/config.toml`):
-```toml
-[mcp_servers.cccmemory]
-command = "npx"
-args = ["-y", "cccmemory"]
-```
-
-### 4. Database migration (automatic)
-
-Your conversation history is preserved. The database files are automatically migrated:
-- `.claude-conversations-memory.db` → `.cccmemory.db`
-- `.codex-conversations-memory.db` → `.cccmemory.db`
-
-No manual action required - the migration happens on first run.
+</details>
 
 ---
 
 ## Features
 
 - **Search conversations** - Natural language search across your chat history
+- **Smart chunking** - Long messages fully indexed without truncation
+- **Hybrid search** - Combines vector + keyword search with RRF re-ranking
 - **Track decisions** - Remember why you made technical choices
 - **Prevent mistakes** - Learn from past errors
 - **Git integration** - Link conversations to commits
@@ -253,6 +223,19 @@ Config:
 
 Set `OPENAI_API_KEY` environment variable.
 </details>
+
+### Search Configuration (Optional)
+
+Tune search behavior with environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CCCMEMORY_CHUNKING_ENABLED` | `true` | Enable smart chunking for long messages |
+| `CCCMEMORY_CHUNK_SIZE` | `450` | Target chunk size in tokens |
+| `CCCMEMORY_CHUNK_OVERLAP` | `0.1` | Overlap between chunks (0-1) |
+| `CCCMEMORY_RERANK_ENABLED` | `true` | Enable hybrid re-ranking (vector + FTS) |
+| `CCCMEMORY_RERANK_WEIGHT` | `0.7` | Vector weight in re-ranking (FTS gets 1-weight) |
+| `CCCMEMORY_QUERY_EXPANSION` | `false` | Enable synonym expansion for queries |
 
 ## MCP Tools
 
