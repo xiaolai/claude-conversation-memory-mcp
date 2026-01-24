@@ -11,6 +11,10 @@ import type { Decision } from "../parsers/DecisionExtractor.js";
 import type { Mistake } from "../parsers/MistakeExtractor.js";
 import type { MessageRow, DecisionRow, ConversationRow } from "../types/ToolTypes.js";
 import { safeJsonParse } from "../utils/safeJson.js";
+import { getTextChunker, getChunkingConfig } from "../chunking/index.js";
+import { ResultAggregator } from "./ResultAggregator.js";
+import { HybridReranker, getRerankConfig } from "./HybridReranker.js";
+import { SnippetGenerator } from "./SnippetGenerator.js";
 
 export interface SearchFilter {
   date_range?: [number, number];
@@ -48,6 +52,7 @@ export class SemanticSearch {
 
   /**
    * Index all messages for semantic search
+   * Uses chunking for long messages that exceed the embedding model's token limit
    * @param messages - Messages to index
    * @param incremental - If true, skip messages that already have embeddings (default: true for fast re-indexing)
    */
@@ -86,25 +91,93 @@ export class SemanticSearch {
     }
     console.error(`Generating embeddings for ${messagesToIndex.length} ${incremental ? "new " : ""}messages...`);
 
-    // Generate embeddings in batches
-    const texts = messagesToIndex.map((m) => m.content);
-    const embeddings = await embedder.embedBatch(texts, 32);
-
     // Get model name from embedder info
     const embedderInfo = EmbeddingGenerator.getInfo();
     const modelName = embedderInfo?.model || "all-MiniLM-L6-v2";
 
-    // Store embeddings
-    for (let i = 0; i < messagesToIndex.length; i++) {
-      await this.vectorStore.storeMessageEmbedding(
-        messagesToIndex[i].id,
-        messagesToIndex[i].content,
-        embeddings[i],
-        modelName
-      );
+    // Check if chunking is enabled and supported
+    const chunkingConfig = getChunkingConfig();
+    const useChunking = chunkingConfig.enabled && this.vectorStore.hasChunkEmbeddingsTable();
+
+    if (useChunking) {
+      await this.indexMessagesWithChunking(messagesToIndex, embedder, modelName);
+    } else {
+      // Original behavior: embed full messages
+      const texts = messagesToIndex.map((m) => m.content);
+      const embeddings = await embedder.embedBatch(texts, 32);
+
+      for (let i = 0; i < messagesToIndex.length; i++) {
+        await this.vectorStore.storeMessageEmbedding(
+          messagesToIndex[i].id,
+          messagesToIndex[i].content,
+          embeddings[i],
+          modelName
+        );
+      }
     }
 
     console.error("✓ Indexing complete");
+  }
+
+  /**
+   * Index messages using chunking for long content
+   */
+  private async indexMessagesWithChunking(
+    messages: Array<{ id: number; content: string }>,
+    embedder: Awaited<ReturnType<typeof getEmbeddingGenerator>>,
+    modelName: string
+  ): Promise<void> {
+    const chunker = getTextChunker();
+    let totalChunks = 0;
+    let chunkedMessages = 0;
+
+    // Process each message
+    for (const message of messages) {
+      const chunkResult = chunker.chunk(message.content);
+
+      if (chunkResult.wasChunked) {
+        // Message was chunked - store chunk embeddings
+        chunkedMessages++;
+
+        // Generate embeddings for all chunks
+        const chunkTexts = chunkResult.chunks.map((c) => c.content);
+        const chunkEmbeddings = await embedder.embedBatch(chunkTexts, 32);
+
+        // Store chunk embeddings
+        for (let i = 0; i < chunkResult.chunks.length; i++) {
+          await this.vectorStore.storeChunkEmbedding({
+            messageId: message.id,
+            chunk: chunkResult.chunks[i],
+            embedding: chunkEmbeddings[i],
+            modelName,
+          });
+        }
+
+        totalChunks += chunkResult.chunks.length;
+
+        // Also store the first chunk as the "representative" message embedding
+        // This ensures backwards compatibility with non-chunk-aware search
+        await this.vectorStore.storeMessageEmbedding(
+          message.id,
+          chunkResult.chunks[0].content,
+          chunkEmbeddings[0],
+          modelName
+        );
+      } else {
+        // Message fits in single embedding - use standard approach
+        const embedding = await embedder.embed(message.content);
+        await this.vectorStore.storeMessageEmbedding(
+          message.id,
+          message.content,
+          embedding,
+          modelName
+        );
+      }
+    }
+
+    if (chunkedMessages > 0) {
+      console.error(`📦 Chunked ${chunkedMessages} long messages into ${totalChunks} chunks`);
+    }
   }
 
   /**
@@ -472,6 +545,7 @@ export class SemanticSearch {
 
   /**
    * Search conversations using natural language query
+   * Uses chunk search for better coverage of long messages
    * @param query - The search query text
    * @param limit - Maximum results to return
    * @param filter - Optional filter criteria
@@ -494,35 +568,48 @@ export class SemanticSearch {
       // Use pre-computed embedding if provided, otherwise generate
       const queryEmbedding = precomputedEmbedding ?? await embedder.embed(query);
 
-      // Search vector store
-      const vectorResults = await this.vectorStore.searchMessages(
-        queryEmbedding,
-        limit * 2 // Get more results for filtering
-      );
+      // Check if chunk embeddings are available
+      const useChunks = this.vectorStore.hasChunkEmbeddingsTable() &&
+                        this.vectorStore.getChunkEmbeddingCount() > 0;
 
-      // Enrich with message and conversation data
-      const enrichedResults: SearchResult[] = [];
+      let enrichedResults: SearchResult[] = [];
 
-      for (const vecResult of vectorResults) {
-        const message = this.getMessage(vecResult.id);
-        if (!message) {continue;}
+      if (useChunks) {
+        // Use hybrid search: chunks + messages
+        enrichedResults = await this.searchWithChunkAggregation(
+          queryEmbedding,
+          query,
+          limit,
+          filter
+        );
+      } else {
+        // Original behavior: search message embeddings only
+        const vectorResults = await this.vectorStore.searchMessages(
+          queryEmbedding,
+          limit * 2 // Get more results for filtering
+        );
 
-        // Apply filters
-        if (filter) {
-          if (!this.applyFilter(message, filter)) {continue;}
+        for (const vecResult of vectorResults) {
+          const message = this.getMessage(vecResult.id);
+          if (!message) {continue;}
+
+          // Apply filters
+          if (filter) {
+            if (!this.applyFilter(message, filter)) {continue;}
+          }
+
+          const conversation = this.getConversation(message.conversation_internal_id);
+          if (!conversation) {continue;}
+
+          enrichedResults.push({
+            message,
+            conversation,
+            similarity: vecResult.similarity,
+            snippet: this.generateSnippet(vecResult.content, query),
+          });
+
+          if (enrichedResults.length >= limit) {break;}
         }
-
-        const conversation = this.getConversation(message.conversation_internal_id);
-        if (!conversation) {continue;}
-
-        enrichedResults.push({
-          message,
-          conversation,
-          similarity: vecResult.similarity,
-          snippet: this.generateSnippet(vecResult.content, query),
-        });
-
-        if (enrichedResults.length >= limit) {break;}
       }
 
       // Fall back to FTS if vector search returned no results
@@ -539,6 +626,214 @@ export class SemanticSearch {
       console.error("Embedding error, falling back to FTS:", (error as Error).message);
       return this.fallbackFullTextSearch(query, limit, filter);
     }
+  }
+
+  /**
+   * Search using chunk aggregation for better coverage of long messages
+   * Now includes hybrid re-ranking with FTS results
+   */
+  private async searchWithChunkAggregation(
+    queryEmbedding: Float32Array,
+    query: string,
+    limit: number,
+    filter?: SearchFilter
+  ): Promise<SearchResult[]> {
+    // Calculate dynamic similarity threshold
+    const minSimilarity = this.calculateDynamicThreshold(query);
+
+    // Search chunks with 3x limit for aggregation
+    const chunkResults = await this.vectorStore.searchChunks(queryEmbedding, limit * 3);
+
+    // Also search message embeddings for non-chunked messages
+    const messageResults = await this.vectorStore.searchMessages(queryEmbedding, limit * 2);
+
+    // Aggregate chunk results by message
+    const aggregator = new ResultAggregator({
+      minSimilarity,
+      limit: limit * 2, // Get more for filtering/reranking
+      deduplicate: true,
+      deduplicationThreshold: 0.7,
+    });
+
+    const aggregatedChunks = aggregator.aggregate(chunkResults);
+
+    // Merge with message results
+    const mergedResults = aggregator.mergeResults(
+      aggregatedChunks,
+      messageResults.map((r) => ({
+        messageId: r.id,
+        content: r.content,
+        similarity: r.similarity,
+      }))
+    );
+
+    // Check if hybrid re-ranking is enabled
+    const rerankConfig = getRerankConfig();
+
+    let rankedResults: Array<{ messageId: number; similarity: number; snippet: string }>;
+
+    if (rerankConfig.enabled) {
+      // Get FTS results for re-ranking
+      const ftsMessageIds = this.getFtsMessageIds(query, limit * 2, filter);
+
+      if (ftsMessageIds.length > 0) {
+        // Create reranker
+        const reranker = new HybridReranker(rerankConfig);
+
+        // Prepare results for reranking
+        const vectorRankable = mergedResults.map((r) => ({
+          id: r.messageId,
+          score: r.similarity,
+        }));
+
+        const ftsRankable = ftsMessageIds.map((r, idx) => ({
+          id: r.id,
+          score: 1 / (idx + 1), // Convert rank to score
+        }));
+
+        // Apply RRF
+        const reranked = reranker.rerankWithOverlapBoost(
+          vectorRankable,
+          ftsRankable,
+          limit * 2
+        );
+
+        // Map reranked results back to our format
+        const resultMap = new Map(
+          mergedResults.map((r) => [r.messageId, r])
+        );
+
+        rankedResults = reranked
+          .map((rr) => {
+            const original = resultMap.get(rr.id as number);
+            if (original) {
+              return {
+                messageId: original.messageId,
+                similarity: rr.combinedScore,
+                snippet: original.bestSnippet,
+              };
+            }
+            // FTS-only result - need to fetch content
+            return {
+              messageId: rr.id as number,
+              similarity: rr.combinedScore,
+              snippet: "", // Will be filled later
+            };
+          })
+          .filter((r) => r !== null);
+      } else {
+        // No FTS results, use vector-only
+        rankedResults = mergedResults.map((r) => ({
+          messageId: r.messageId,
+          similarity: r.similarity,
+          snippet: r.bestSnippet,
+        }));
+      }
+    } else {
+      // Re-ranking disabled, use merged results directly
+      rankedResults = mergedResults.map((r) => ({
+        messageId: r.messageId,
+        similarity: r.similarity,
+        snippet: r.bestSnippet,
+      }));
+    }
+
+    // Enrich with message and conversation data
+    const enrichedResults: SearchResult[] = [];
+
+    for (const result of rankedResults) {
+      const message = this.getMessage(result.messageId);
+      if (!message) {continue;}
+
+      // Apply filters
+      if (filter) {
+        if (!this.applyFilter(message, filter)) {continue;}
+      }
+
+      const conversation = this.getConversation(message.conversation_internal_id);
+      if (!conversation) {continue;}
+
+      // If snippet is empty (FTS-only result), generate it
+      const snippet = result.snippet || message.content || "";
+
+      enrichedResults.push({
+        message,
+        conversation,
+        similarity: result.similarity,
+        snippet: this.generateSnippet(snippet, query),
+      });
+
+      if (enrichedResults.length >= limit) {break;}
+    }
+
+    return enrichedResults;
+  }
+
+  /**
+   * Get message IDs from FTS search (for re-ranking)
+   */
+  private getFtsMessageIds(
+    query: string,
+    limit: number,
+    filter?: SearchFilter
+  ): Array<{ id: number; content: string }> {
+    const ftsQuery = this.sanitizeFtsQuery(query);
+
+    try {
+      let sql = `
+        SELECT m.id, m.content
+        FROM messages m
+        WHERE m.id IN (
+          SELECT id FROM messages_fts WHERE messages_fts MATCH ?
+        )
+      `;
+
+      const params: (string | number)[] = [ftsQuery];
+
+      // Apply filters
+      if (filter) {
+        if (filter.date_range) {
+          sql += " AND m.timestamp BETWEEN ? AND ?";
+          params.push(filter.date_range[0], filter.date_range[1]);
+        }
+
+        if (filter.message_type && filter.message_type.length > 0) {
+          sql += ` AND m.message_type IN (${filter.message_type.map(() => "?").join(",")})`;
+          params.push(...filter.message_type);
+        }
+
+        if (filter.conversation_id) {
+          sql += " AND m.conversation_id IN (SELECT id FROM conversations WHERE external_id = ?)";
+          params.push(filter.conversation_id);
+        }
+      }
+
+      sql += " ORDER BY m.timestamp DESC LIMIT ?";
+      params.push(limit);
+
+      const rows = this.db.prepare(sql).all(...params) as Array<{
+        id: number;
+        content: string;
+      }>;
+
+      return rows;
+    } catch (_e) {
+      // FTS might not be available
+      return [];
+    }
+  }
+
+  /**
+   * Calculate dynamic similarity threshold based on query length
+   * Longer queries should have higher thresholds (more context = better matching)
+   */
+  private calculateDynamicThreshold(query: string): number {
+    const baseThreshold = 0.30;
+    const maxThreshold = 0.55;
+    const words = query.trim().split(/\s+/).length;
+
+    // Add 0.01 per word, capped at maxThreshold
+    return Math.min(baseThreshold + words * 0.01, maxThreshold);
   }
 
   /**
@@ -1220,28 +1515,15 @@ export class SemanticSearch {
   }
 
   /**
-   * Generate snippet from content
+   * Snippet generator instance
    */
-  private generateSnippet(content: string, query: string, length: number = 150): string {
-    // Try to find query term in content
-    const lowerContent = content.toLowerCase();
-    const lowerQuery = query.toLowerCase();
-    const index = lowerContent.indexOf(lowerQuery);
+  private snippetGenerator: SnippetGenerator = new SnippetGenerator();
 
-    if (index !== -1) {
-      // Extract around query term
-      const start = Math.max(0, index - 50);
-      const end = Math.min(content.length, index + query.length + 100);
-      let snippet = content.substring(start, end);
-
-      if (start > 0) {snippet = "..." + snippet;}
-      if (end < content.length) {snippet = snippet + "...";}
-
-      return snippet;
-    }
-
-    // Otherwise just return beginning
-    return content.substring(0, length) + (content.length > length ? "..." : "");
+  /**
+   * Generate snippet from content using advanced snippet generation
+   */
+  private generateSnippet(content: string, query: string, _length: number = 150): string {
+    return this.snippetGenerator.generate(content, query);
   }
 
   /**

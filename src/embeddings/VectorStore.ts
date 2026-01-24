@@ -5,12 +5,49 @@
 
 import type { SQLiteManager } from "../storage/SQLiteManager.js";
 import Database from "better-sqlite3";
+import type { TextChunk } from "../chunking/index.js";
 
 export interface VectorSearchResult {
   id: number;
   content: string;
   similarity: number;
   metadata?: Record<string, unknown>;
+}
+
+export interface ChunkSearchResult {
+  chunkId: string;
+  messageId: number;
+  chunkIndex: number;
+  totalChunks: number;
+  content: string;
+  startOffset: number;
+  endOffset: number;
+  similarity: number;
+  strategy: string;
+}
+
+export interface ChunkEmbeddingData {
+  messageId: number;
+  chunk: TextChunk;
+  embedding: Float32Array;
+  modelName: string;
+}
+
+/**
+ * Filter options for pre-filtering vector search
+ */
+export interface SearchFilterOptions {
+  /** Filter by date range [start, end] as Unix timestamps */
+  dateRange?: [number, number];
+
+  /** Filter by conversation IDs (internal) */
+  conversationIds?: number[];
+
+  /** Filter by message types */
+  messageTypes?: string[];
+
+  /** Minimum similarity threshold */
+  minSimilarity?: number;
 }
 
 export class VectorStore {
@@ -384,51 +421,114 @@ export class VectorStore {
   }
 
   /**
+   * Filter options for vector search
+   */
+  searchFilterOptions?: SearchFilterOptions;
+
+  /**
    * Search for similar messages
    */
   async searchMessages(
     queryEmbedding: Float32Array,
-    limit: number = 10
+    limit: number = 10,
+    filter?: SearchFilterOptions
   ): Promise<VectorSearchResult[]> {
     if (this.hasVecExtension) {
-      return this.searchWithVecExtension(queryEmbedding, limit);
+      return this.searchWithVecExtension(queryEmbedding, limit, filter);
     } else {
-      return this.searchWithCosine(queryEmbedding, limit);
+      return this.searchWithCosine(queryEmbedding, limit, filter);
     }
   }
 
   /**
-   * Search using sqlite-vec extension
+   * Search using sqlite-vec extension with optional pre-filtering
    */
   private searchWithVecExtension(
     queryEmbedding: Float32Array,
-    limit: number
+    limit: number,
+    filter?: SearchFilterOptions
   ): VectorSearchResult[] {
     try {
       this.ensureVecTables(queryEmbedding.length);
       const queryBuffer = this.float32ArrayToBuffer(queryEmbedding);
 
-      const results = this.db
-        .prepare(
-          `SELECT
+      // Build query with optional pre-filtering
+      let sql: string;
+      const params: (Buffer | number | string)[] = [queryBuffer];
+
+      if (filter && this.hasFilterConditions(filter)) {
+        // Use CTE with pre-filtering for better performance
+        sql = `
+          WITH filtered_messages AS (
+            SELECT me.id, me.message_id, me.content
+            FROM message_embeddings me
+            JOIN messages m ON me.message_id = m.id
+            WHERE 1=1
+        `;
+
+        // Add filter conditions
+        if (filter.dateRange) {
+          sql += " AND m.timestamp BETWEEN ? AND ?";
+          params.push(filter.dateRange[0], filter.dateRange[1]);
+        }
+
+        if (filter.conversationIds && filter.conversationIds.length > 0) {
+          sql += ` AND m.conversation_id IN (${filter.conversationIds.map(() => "?").join(",")})`;
+          params.push(...filter.conversationIds);
+        }
+
+        if (filter.messageTypes && filter.messageTypes.length > 0) {
+          sql += ` AND m.message_type IN (${filter.messageTypes.map(() => "?").join(",")})`;
+          params.push(...filter.messageTypes);
+        }
+
+        sql += `
+          )
+          SELECT
+            vec.id,
+            fm.content,
+            vec_distance_cosine(vec.embedding, ?) as distance
+          FROM vec_message_embeddings vec
+          JOIN filtered_messages fm ON vec.id = fm.id
+          ORDER BY distance
+          LIMIT ?
+        `;
+
+        // Add query buffer again for the vec_distance_cosine call
+        params.push(queryBuffer);
+        params.push(limit);
+      } else {
+        // No filters - use simple query
+        sql = `
+          SELECT
             vec.id,
             me.content,
             vec_distance_cosine(vec.embedding, ?) as distance
           FROM vec_message_embeddings vec
           JOIN message_embeddings me ON vec.id = me.id
           ORDER BY distance
-          LIMIT ?`
-        )
-        .all(queryBuffer, limit) as Array<{
+          LIMIT ?
+        `;
+        params.push(limit);
+      }
+
+      const results = this.db.prepare(sql).all(...params) as Array<{
         id: string;
         content: string;
         distance: number;
       }>;
 
-      return results.map((r) => ({
+      // Apply minimum similarity filter if specified
+      let filteredResults = results;
+      if (filter?.minSimilarity) {
+        const minSim = filter.minSimilarity;
+        filteredResults = results.filter((r) => (1 - r.distance) >= minSim);
+      }
+
+      return filteredResults.map((r) => ({
         id: Number(r.id.replace("msg_", "")),
         content: r.content,
-        similarity: 1 - r.distance, // Convert distance to similarity
+        similarity: 1 - r.distance,
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -436,27 +536,60 @@ export class VectorStore {
         console.error("Error in vec search:", error);
       }
       // Fallback to cosine
-      return this.searchWithCosine(queryEmbedding, limit);
+      return this.searchWithCosine(queryEmbedding, limit, filter);
     }
   }
 
   /**
-   * Search using manual cosine similarity (fallback)
+   * Check if filter has any conditions
+   */
+  private hasFilterConditions(filter: SearchFilterOptions): boolean {
+    return Boolean(
+      filter.dateRange ||
+      (filter.conversationIds && filter.conversationIds.length > 0) ||
+      (filter.messageTypes && filter.messageTypes.length > 0)
+    );
+  }
+
+  /**
+   * Search using manual cosine similarity (fallback) with optional pre-filtering
    */
   private searchWithCosine(
     queryEmbedding: Float32Array,
-    limit: number
+    limit: number,
+    filter?: SearchFilterOptions
   ): VectorSearchResult[] {
-    const allEmbeddings = this.db
-      .prepare("SELECT id, message_id, content, embedding FROM message_embeddings")
-      .all() as Array<{
+    // Build query with optional pre-filtering
+    let sql = "SELECT me.id, me.message_id, me.content, me.embedding FROM message_embeddings me";
+    const params: (number | string)[] = [];
+
+    if (filter && this.hasFilterConditions(filter)) {
+      sql += " JOIN messages m ON me.message_id = m.id WHERE 1=1";
+
+      if (filter.dateRange) {
+        sql += " AND m.timestamp BETWEEN ? AND ?";
+        params.push(filter.dateRange[0], filter.dateRange[1]);
+      }
+
+      if (filter.conversationIds && filter.conversationIds.length > 0) {
+        sql += ` AND m.conversation_id IN (${filter.conversationIds.map(() => "?").join(",")})`;
+        params.push(...filter.conversationIds);
+      }
+
+      if (filter.messageTypes && filter.messageTypes.length > 0) {
+        sql += ` AND m.message_type IN (${filter.messageTypes.map(() => "?").join(",")})`;
+        params.push(...filter.messageTypes);
+      }
+    }
+
+    const allEmbeddings = this.db.prepare(sql).all(...params) as Array<{
       id: string;
       message_id: number;
       content: string;
       embedding: Buffer;
     }>;
 
-    const results = allEmbeddings
+    let results = allEmbeddings
       .map((row) => {
         const embedding = this.bufferToFloat32Array(row.embedding);
         const similarity = this.cosineSimilarity(queryEmbedding, embedding);
@@ -467,10 +600,15 @@ export class VectorStore {
           similarity,
         };
       })
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, limit);
+      .sort((a, b) => b.similarity - a.similarity);
 
-    return results;
+    // Apply minimum similarity filter
+    const minSim = filter?.minSimilarity;
+    if (minSim) {
+      results = results.filter((r) => r.similarity >= minSim);
+    }
+
+    return results.slice(0, limit);
   }
 
   /**
@@ -546,6 +684,11 @@ export class VectorStore {
     } catch (_e) {
       // Table might not exist yet
     }
+    try {
+      this.db.exec("DELETE FROM chunk_embeddings");
+    } catch (_e) {
+      // Table might not exist yet
+    }
 
     if (this.hasVecExtension) {
       try {
@@ -563,6 +706,315 @@ export class VectorStore {
       } catch (_e) {
         // Vector table might not exist
       }
+      try {
+        this.db.exec("DELETE FROM vec_chunk_embeddings");
+      } catch (_e) {
+        // Vector table might not exist
+      }
+    }
+  }
+
+  // ==================================================
+  // CHUNK EMBEDDINGS SUPPORT
+  // ==================================================
+
+  /**
+   * Store embedding for a text chunk
+   */
+  async storeChunkEmbedding(data: ChunkEmbeddingData): Promise<void> {
+    const { messageId, chunk, embedding, modelName } = data;
+
+    // Validate message exists if foreign keys are enabled
+    const foreignKeysEnabled = Boolean(
+      this.db.pragma("foreign_keys", { simple: true }) as number
+    );
+    if (foreignKeysEnabled) {
+      const messageExists = this.db
+        .prepare("SELECT 1 FROM messages WHERE id = ?")
+        .get(messageId);
+      if (!messageExists) {
+        return;
+      }
+    }
+
+    const chunkId = `chunk_${messageId}_${chunk.index}`;
+
+    // Store in chunk_embeddings table
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO chunk_embeddings
+           (id, message_id, chunk_index, total_chunks, content, start_offset, end_offset,
+            embedding, strategy, model_name, estimated_tokens, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             content = excluded.content,
+             embedding = excluded.embedding,
+             estimated_tokens = excluded.estimated_tokens,
+             created_at = excluded.created_at`
+        )
+        .run(
+          chunkId,
+          messageId,
+          chunk.index,
+          chunk.totalChunks,
+          chunk.content,
+          chunk.startOffset,
+          chunk.endOffset,
+          this.float32ArrayToBuffer(embedding),
+          chunk.strategy,
+          modelName,
+          chunk.estimatedTokens,
+          Date.now()
+        );
+    } catch (error) {
+      // Table might not exist yet (pre-migration)
+      const errorMessage = (error as Error).message;
+      if (!errorMessage.includes("no such table")) {
+        console.error("Chunk embedding storage failed:", errorMessage);
+      }
+      return;
+    }
+
+    // Also store in vec table for fast ANN search
+    if (this.hasVecExtension) {
+      try {
+        this.ensureVecChunkTable(embedding.length);
+
+        // Delete existing entry first
+        try {
+          this.db
+            .prepare("DELETE FROM vec_chunk_embeddings WHERE id = ?")
+            .run(chunkId);
+        } catch (_e) {
+          // Entry might not exist
+        }
+
+        this.db
+          .prepare(
+            "INSERT INTO vec_chunk_embeddings (id, embedding) VALUES (?, ?)"
+          )
+          .run(chunkId, this.float32ArrayToBuffer(embedding));
+      } catch (error) {
+        const errorMessage = (error as Error).message;
+        if (!errorMessage.includes("UNIQUE constraint")) {
+          console.error("Vec chunk embedding storage failed:", errorMessage);
+        }
+      }
+    }
+  }
+
+  /**
+   * Store multiple chunk embeddings in batch
+   */
+  async storeChunkEmbeddingsBatch(chunks: ChunkEmbeddingData[]): Promise<void> {
+    for (const chunk of chunks) {
+      await this.storeChunkEmbedding(chunk);
+    }
+  }
+
+  /**
+   * Ensure vec_chunk_embeddings virtual table exists
+   */
+  private ensureVecChunkTable(dimensions: number): void {
+    if (!this.hasVecExtension) {
+      return;
+    }
+
+    try {
+      // Check if table exists
+      this.db.prepare("SELECT 1 FROM vec_chunk_embeddings LIMIT 1").get();
+    } catch (_e) {
+      // Table doesn't exist, create it
+      // SECURITY: dimensions is validated in createVecTablesWithDimensions
+      if (!Number.isInteger(dimensions) || dimensions <= 0 || dimensions > 10000) {
+        throw new Error(`Invalid dimensions: must be a positive integer <= 10000`);
+      }
+
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunk_embeddings
+        USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding float[${dimensions}]
+        )
+      `);
+    }
+  }
+
+  /**
+   * Search chunk embeddings for similar content
+   */
+  async searchChunks(
+    queryEmbedding: Float32Array,
+    limit: number = 30
+  ): Promise<ChunkSearchResult[]> {
+    if (this.hasVecExtension) {
+      return this.searchChunksWithVec(queryEmbedding, limit);
+    } else {
+      return this.searchChunksWithCosine(queryEmbedding, limit);
+    }
+  }
+
+  /**
+   * Search chunks using sqlite-vec extension
+   */
+  private searchChunksWithVec(
+    queryEmbedding: Float32Array,
+    limit: number
+  ): ChunkSearchResult[] {
+    try {
+      this.ensureVecChunkTable(queryEmbedding.length);
+      const queryBuffer = this.float32ArrayToBuffer(queryEmbedding);
+
+      const results = this.db
+        .prepare(
+          `SELECT
+            vec.id,
+            ce.message_id,
+            ce.chunk_index,
+            ce.total_chunks,
+            ce.content,
+            ce.start_offset,
+            ce.end_offset,
+            ce.strategy,
+            vec_distance_cosine(vec.embedding, ?) as distance
+          FROM vec_chunk_embeddings vec
+          JOIN chunk_embeddings ce ON vec.id = ce.id
+          ORDER BY distance
+          LIMIT ?`
+        )
+        .all(queryBuffer, limit) as Array<{
+        id: string;
+        message_id: number;
+        chunk_index: number;
+        total_chunks: number;
+        content: string;
+        start_offset: number;
+        end_offset: number;
+        strategy: string;
+        distance: number;
+      }>;
+
+      return results.map((r) => ({
+        chunkId: r.id,
+        messageId: r.message_id,
+        chunkIndex: r.chunk_index,
+        totalChunks: r.total_chunks,
+        content: r.content,
+        startOffset: r.start_offset,
+        endOffset: r.end_offset,
+        similarity: 1 - r.distance,
+        strategy: r.strategy,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("no such table")) {
+        console.error("Error in vec chunk search:", error);
+      }
+      return this.searchChunksWithCosine(queryEmbedding, limit);
+    }
+  }
+
+  /**
+   * Search chunks using manual cosine similarity (fallback)
+   */
+  private searchChunksWithCosine(
+    queryEmbedding: Float32Array,
+    limit: number
+  ): ChunkSearchResult[] {
+    try {
+      const allChunks = this.db
+        .prepare(
+          `SELECT id, message_id, chunk_index, total_chunks, content,
+                  start_offset, end_offset, strategy, embedding
+           FROM chunk_embeddings`
+        )
+        .all() as Array<{
+        id: string;
+        message_id: number;
+        chunk_index: number;
+        total_chunks: number;
+        content: string;
+        start_offset: number;
+        end_offset: number;
+        strategy: string;
+        embedding: Buffer;
+      }>;
+
+      const results = allChunks
+        .map((row) => {
+          const embedding = this.bufferToFloat32Array(row.embedding);
+          const similarity = this.cosineSimilarity(queryEmbedding, embedding);
+
+          return {
+            chunkId: row.id,
+            messageId: row.message_id,
+            chunkIndex: row.chunk_index,
+            totalChunks: row.total_chunks,
+            content: row.content,
+            startOffset: row.start_offset,
+            endOffset: row.end_offset,
+            similarity,
+            strategy: row.strategy,
+          };
+        })
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit);
+
+      return results;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("no such table")) {
+        console.error("Error in cosine chunk search:", error);
+      }
+      return [];
+    }
+  }
+
+  /**
+   * Get set of message IDs that already have chunk embeddings
+   */
+  getExistingChunkEmbeddingMessageIds(): Set<number> {
+    const ids = new Set<number>();
+
+    try {
+      const rows = this.db
+        .prepare("SELECT DISTINCT message_id FROM chunk_embeddings")
+        .all() as Array<{ message_id: number }>;
+
+      for (const row of rows) {
+        ids.add(row.message_id);
+      }
+    } catch (_e) {
+      // Table might not exist yet
+    }
+
+    return ids;
+  }
+
+  /**
+   * Get chunk count for statistics
+   */
+  getChunkEmbeddingCount(): number {
+    try {
+      const result = this.db
+        .prepare("SELECT COUNT(*) as count FROM chunk_embeddings")
+        .get() as { count: number };
+      return result.count;
+    } catch (_e) {
+      return 0;
+    }
+  }
+
+  /**
+   * Check if chunk embeddings table exists
+   */
+  hasChunkEmbeddingsTable(): boolean {
+    try {
+      this.db.prepare("SELECT 1 FROM chunk_embeddings LIMIT 1").get();
+      return true;
+    } catch (_e) {
+      return false;
     }
   }
 }

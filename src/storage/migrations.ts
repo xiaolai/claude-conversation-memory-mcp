@@ -170,6 +170,57 @@ export const migrations: Migration[] = [
       -- would be required to remove them completely.
     `,
   },
+  {
+    version: 3,
+    description: "Search Quality: Chunk embeddings for long messages",
+    up: `
+      -- ==================================================
+      -- CHUNK EMBEDDINGS TABLE
+      -- Stores embeddings for text chunks from long messages
+      -- ==================================================
+
+      CREATE TABLE IF NOT EXISTS chunk_embeddings (
+        id TEXT PRIMARY KEY,                    -- Format: chunk_<msg_id>_<index>
+        message_id INTEGER NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        total_chunks INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        start_offset INTEGER NOT NULL,
+        end_offset INTEGER NOT NULL,
+        embedding BLOB NOT NULL,
+        strategy TEXT NOT NULL,                 -- 'sentence', 'sliding_window', etc.
+        model_name TEXT,
+        estimated_tokens INTEGER,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chunk_embed_msg ON chunk_embeddings(message_id);
+      CREATE INDEX IF NOT EXISTS idx_chunk_embed_strategy ON chunk_embeddings(strategy);
+      CREATE INDEX IF NOT EXISTS idx_chunk_embed_created ON chunk_embeddings(created_at);
+
+      -- Search configuration table for tuning parameters
+      CREATE TABLE IF NOT EXISTS search_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        description TEXT,
+        updated_at INTEGER NOT NULL
+      );
+
+      -- Insert default search configuration
+      INSERT OR IGNORE INTO search_config (key, value, description, updated_at) VALUES
+        ('chunking_enabled', 'true', 'Enable text chunking for long messages', strftime('%s', 'now') * 1000),
+        ('chunk_size', '450', 'Target chunk size in tokens', strftime('%s', 'now') * 1000),
+        ('chunk_overlap', '0.1', 'Overlap between chunks as fraction', strftime('%s', 'now') * 1000),
+        ('min_similarity', '0.30', 'Minimum similarity threshold for results', strftime('%s', 'now') * 1000),
+        ('rerank_enabled', 'true', 'Enable hybrid re-ranking with FTS', strftime('%s', 'now') * 1000),
+        ('rerank_weight', '0.7', 'Weight for vector search in re-ranking (0-1)', strftime('%s', 'now') * 1000);
+    `,
+    down: `
+      DROP TABLE IF EXISTS search_config;
+      DROP TABLE IF EXISTS chunk_embeddings;
+    `,
+  },
 ];
 
 export class MigrationManager {

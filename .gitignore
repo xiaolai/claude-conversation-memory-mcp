@@ -46,6 +46,7 @@ docs/
 .claude/
 CLAUDE.md
 .claude-flow/
+.mcp.json
 
 .writers-aid/
 logs_llm/
