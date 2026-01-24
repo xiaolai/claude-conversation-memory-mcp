@@ -4155,8 +4155,9 @@ export class ToolHandlers {
           });
         }
         const tagName = tagIdToName.get(row.tag_id);
-        if (tagName) {
-          itemMap.get(key)!.matched_tags.add(tagName);
+        const item = itemMap.get(key);
+        if (tagName && item) {
+          item.matched_tags.add(tagName);
         }
       }
 
@@ -5415,7 +5416,10 @@ export class ToolHandlers {
           if (!valueMap.has(key)) {
             valueMap.set(key, []);
           }
-          valueMap.get(key)!.push(row);
+          const group = valueMap.get(key);
+          if (group) {
+            group.push(row);
+          }
         }
 
         let groupId = 1;
