@@ -30,6 +30,9 @@ import type { Decision } from "../parsers/DecisionExtractor.js";
 import type { Mistake } from "../parsers/MistakeExtractor.js";
 import type { GitCommit } from "../parsers/GitIntegrator.js";
 import type { Requirement, Validation } from "../parsers/RequirementsExtractor.js";
+import type { Methodology } from "../parsers/MethodologyExtractor.js";
+import type { ResearchFinding } from "../parsers/ResearchExtractor.js";
+import type { SolutionPattern } from "../parsers/SolutionPatternExtractor.js";
 import { sanitizeForLike } from "../utils/sanitization.js";
 import type { GitCommitRow, ConversationRow } from "../types/ToolTypes.js";
 import { QueryCache, type QueryCacheConfig, type CacheStats } from "../cache/QueryCache.js";
@@ -1436,5 +1439,297 @@ export class ConversationStorage {
     };
 
     return stats;
+  }
+
+  // ==================== Methodologies ====================
+
+  /**
+   * Store extracted methodologies in the database.
+   *
+   * Methodologies track how AI solved problems (approach, steps, tools).
+   *
+   * @param methodologies - Array of methodology objects
+   * @param conversationIdMap - Map of external to internal conversation IDs
+   * @param messageIdMap - Map of external to internal message IDs
+   * @returns Promise with map of external to internal methodology IDs
+   */
+  async storeMethodologies(
+    methodologies: Methodology[],
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<Map<string, string>> {
+    if (methodologies.length === 0) {
+      return new Map();
+    }
+
+    const stmt = this.db.prepare(`
+      INSERT INTO methodologies
+      (id, conversation_id, start_message_id, end_message_id, problem_statement,
+       approach, steps_taken, tools_used, files_involved, outcome,
+       what_worked, what_didnt_work, started_at, ended_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        problem_statement = excluded.problem_statement,
+        approach = excluded.approach,
+        steps_taken = excluded.steps_taken,
+        tools_used = excluded.tools_used,
+        files_involved = excluded.files_involved,
+        outcome = excluded.outcome,
+        what_worked = excluded.what_worked,
+        what_didnt_work = excluded.what_didnt_work,
+        ended_at = excluded.ended_at
+    `);
+
+    const ftsStmt = this.db.prepare(`
+      INSERT INTO methodologies_fts (id, problem_statement, what_worked, what_didnt_work)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const methodologyIdMap = new Map<string, string>();
+    let skipped = 0;
+
+    this.db.transaction(() => {
+      for (const methodology of methodologies) {
+        const conversationId = conversationIdMap.get(methodology.conversation_id);
+        const startMessageId = messageIdMap.get(methodology.start_message_id);
+        const endMessageId = messageIdMap.get(methodology.end_message_id);
+
+        if (!conversationId || !startMessageId || !endMessageId) {
+          skipped += 1;
+          continue;
+        }
+
+        stmt.run(
+          methodology.id,
+          conversationId,
+          startMessageId,
+          endMessageId,
+          methodology.problem_statement,
+          methodology.approach,
+          JSON.stringify(methodology.steps_taken),
+          JSON.stringify(methodology.tools_used),
+          JSON.stringify(methodology.files_involved),
+          methodology.outcome,
+          methodology.what_worked || null,
+          methodology.what_didnt_work || null,
+          methodology.started_at,
+          methodology.ended_at
+        );
+
+        // Index in FTS
+        try {
+          ftsStmt.run(
+            methodology.id,
+            methodology.problem_statement,
+            methodology.what_worked || "",
+            methodology.what_didnt_work || ""
+          );
+        } catch {
+          // FTS entry may already exist, ignore
+        }
+
+        methodologyIdMap.set(methodology.id, methodology.id);
+      }
+    });
+
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} methodology(ies) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${methodologies.length - skipped} methodologies`);
+    return methodologyIdMap;
+  }
+
+  // ==================== Research Findings ====================
+
+  /**
+   * Store extracted research findings in the database.
+   *
+   * Research findings track discoveries made during exploration/research.
+   *
+   * @param findings - Array of research finding objects
+   * @param conversationIdMap - Map of external to internal conversation IDs
+   * @param messageIdMap - Map of external to internal message IDs
+   * @returns Promise with map of external to internal finding IDs
+   */
+  async storeResearchFindings(
+    findings: ResearchFinding[],
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<Map<string, string>> {
+    if (findings.length === 0) {
+      return new Map();
+    }
+
+    const stmt = this.db.prepare(`
+      INSERT INTO research_findings
+      (id, conversation_id, message_id, topic, discovery, source_type,
+       source_reference, relevance, confidence, related_to, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        topic = excluded.topic,
+        discovery = excluded.discovery,
+        source_type = excluded.source_type,
+        source_reference = excluded.source_reference,
+        relevance = excluded.relevance,
+        confidence = excluded.confidence,
+        related_to = excluded.related_to
+    `);
+
+    const ftsStmt = this.db.prepare(`
+      INSERT INTO research_fts (id, topic, discovery, source_reference)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const findingIdMap = new Map<string, string>();
+    let skipped = 0;
+
+    this.db.transaction(() => {
+      for (const finding of findings) {
+        const conversationId = conversationIdMap.get(finding.conversation_id);
+        const messageId = messageIdMap.get(finding.message_id);
+
+        if (!conversationId || !messageId) {
+          skipped += 1;
+          continue;
+        }
+
+        stmt.run(
+          finding.id,
+          conversationId,
+          messageId,
+          finding.topic,
+          finding.discovery,
+          finding.source_type,
+          finding.source_reference || null,
+          finding.relevance,
+          finding.confidence,
+          JSON.stringify(finding.related_to),
+          finding.timestamp
+        );
+
+        // Index in FTS
+        try {
+          ftsStmt.run(
+            finding.id,
+            finding.topic,
+            finding.discovery,
+            finding.source_reference || ""
+          );
+        } catch {
+          // FTS entry may already exist, ignore
+        }
+
+        findingIdMap.set(finding.id, finding.id);
+      }
+    });
+
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} research finding(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${findings.length - skipped} research findings`);
+    return findingIdMap;
+  }
+
+  // ==================== Solution Patterns ====================
+
+  /**
+   * Store extracted solution patterns in the database.
+   *
+   * Solution patterns track reusable solutions for common problems.
+   *
+   * @param patterns - Array of solution pattern objects
+   * @param conversationIdMap - Map of external to internal conversation IDs
+   * @param messageIdMap - Map of external to internal message IDs
+   * @returns Promise with map of external to internal pattern IDs
+   */
+  async storeSolutionPatterns(
+    patterns: SolutionPattern[],
+    conversationIdMap: Map<string, number>,
+    messageIdMap: Map<string, number>
+  ): Promise<Map<string, string>> {
+    if (patterns.length === 0) {
+      return new Map();
+    }
+
+    const stmt = this.db.prepare(`
+      INSERT INTO solution_patterns
+      (id, conversation_id, message_id, problem_category, problem_description,
+       solution_summary, solution_steps, code_pattern, technology, prerequisites,
+       applies_when, avoid_when, applied_to_files, effectiveness, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        problem_category = excluded.problem_category,
+        problem_description = excluded.problem_description,
+        solution_summary = excluded.solution_summary,
+        solution_steps = excluded.solution_steps,
+        code_pattern = excluded.code_pattern,
+        technology = excluded.technology,
+        prerequisites = excluded.prerequisites,
+        applies_when = excluded.applies_when,
+        avoid_when = excluded.avoid_when,
+        applied_to_files = excluded.applied_to_files,
+        effectiveness = excluded.effectiveness
+    `);
+
+    const ftsStmt = this.db.prepare(`
+      INSERT INTO patterns_fts (id, problem_description, solution_summary, applies_when)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const patternIdMap = new Map<string, string>();
+    let skipped = 0;
+
+    this.db.transaction(() => {
+      for (const pattern of patterns) {
+        const conversationId = conversationIdMap.get(pattern.conversation_id);
+        const messageId = messageIdMap.get(pattern.message_id);
+
+        if (!conversationId || !messageId) {
+          skipped += 1;
+          continue;
+        }
+
+        stmt.run(
+          pattern.id,
+          conversationId,
+          messageId,
+          pattern.problem_category,
+          pattern.problem_description,
+          pattern.solution_summary,
+          JSON.stringify(pattern.solution_steps),
+          pattern.code_pattern || null,
+          JSON.stringify(pattern.technology),
+          JSON.stringify(pattern.prerequisites),
+          pattern.applies_when,
+          pattern.avoid_when || null,
+          JSON.stringify(pattern.applied_to_files),
+          pattern.effectiveness,
+          pattern.timestamp
+        );
+
+        // Index in FTS
+        try {
+          ftsStmt.run(
+            pattern.id,
+            pattern.problem_description,
+            pattern.solution_summary,
+            pattern.applies_when
+          );
+        } catch {
+          // FTS entry may already exist, ignore
+        }
+
+        patternIdMap.set(pattern.id, pattern.id);
+      }
+    });
+
+    if (skipped > 0) {
+      console.error(`⚠️ Skipping ${skipped} solution pattern(s) with missing refs`);
+    }
+
+    console.error(`✓ Stored ${patterns.length - skipped} solution patterns`);
+    return patternIdMap;
   }
 }

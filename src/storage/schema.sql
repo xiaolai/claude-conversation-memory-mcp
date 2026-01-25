@@ -305,6 +305,85 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE INDEX IF NOT EXISTS idx_pref_category ON user_preferences(category);
 
 -- ==================================================
+-- METHODOLOGY & RESEARCH TRACKING TABLES
+-- ==================================================
+
+CREATE TABLE IF NOT EXISTS methodologies (
+  id TEXT PRIMARY KEY,
+  conversation_id INTEGER NOT NULL,
+  start_message_id INTEGER NOT NULL,
+  end_message_id INTEGER NOT NULL,
+  problem_statement TEXT NOT NULL,
+  approach TEXT NOT NULL,
+  steps_taken TEXT NOT NULL,
+  tools_used TEXT NOT NULL,
+  files_involved TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  what_worked TEXT,
+  what_didnt_work TEXT,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (start_message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (end_message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_methodology_conv ON methodologies(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_methodology_approach ON methodologies(approach);
+CREATE INDEX IF NOT EXISTS idx_methodology_outcome ON methodologies(outcome);
+CREATE INDEX IF NOT EXISTS idx_methodology_started ON methodologies(started_at);
+
+CREATE TABLE IF NOT EXISTS research_findings (
+  id TEXT PRIMARY KEY,
+  conversation_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  topic TEXT NOT NULL,
+  discovery TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_reference TEXT,
+  relevance TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  related_to TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_conv ON research_findings(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_research_topic ON research_findings(topic);
+CREATE INDEX IF NOT EXISTS idx_research_source ON research_findings(source_type);
+CREATE INDEX IF NOT EXISTS idx_research_relevance ON research_findings(relevance);
+CREATE INDEX IF NOT EXISTS idx_research_timestamp ON research_findings(timestamp);
+
+CREATE TABLE IF NOT EXISTS solution_patterns (
+  id TEXT PRIMARY KEY,
+  conversation_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  problem_category TEXT NOT NULL,
+  problem_description TEXT NOT NULL,
+  solution_summary TEXT NOT NULL,
+  solution_steps TEXT NOT NULL,
+  code_pattern TEXT,
+  technology TEXT NOT NULL,
+  prerequisites TEXT NOT NULL,
+  applies_when TEXT NOT NULL,
+  avoid_when TEXT,
+  applied_to_files TEXT NOT NULL,
+  effectiveness TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pattern_conv ON solution_patterns(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_pattern_category ON solution_patterns(problem_category);
+CREATE INDEX IF NOT EXISTS idx_pattern_effectiveness ON solution_patterns(effectiveness);
+CREATE INDEX IF NOT EXISTS idx_pattern_timestamp ON solution_patterns(timestamp);
+
+-- ==================================================
 -- VECTOR & SEARCH TABLES
 -- ==================================================
 
@@ -340,6 +419,36 @@ CREATE TABLE IF NOT EXISTS mistake_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_mistake_embed ON mistake_embeddings(mistake_id);
 
+CREATE TABLE IF NOT EXISTS methodology_embeddings (
+  id TEXT PRIMARY KEY,
+  methodology_id TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (methodology_id) REFERENCES methodologies(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_methodology_embed ON methodology_embeddings(methodology_id);
+
+CREATE TABLE IF NOT EXISTS research_embeddings (
+  id TEXT PRIMARY KEY,
+  research_id TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (research_id) REFERENCES research_findings(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_embed ON research_embeddings(research_id);
+
+CREATE TABLE IF NOT EXISTS pattern_embeddings (
+  id TEXT PRIMARY KEY,
+  pattern_id TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (pattern_id) REFERENCES solution_patterns(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pattern_embed ON pattern_embeddings(pattern_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   id UNINDEXED,
   content,
@@ -362,6 +471,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mistakes_fts USING fts5(
   what_went_wrong,
   correction,
   mistake_type
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS methodologies_fts USING fts5(
+  id UNINDEXED,
+  problem_statement,
+  what_worked,
+  what_didnt_work
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS research_fts USING fts5(
+  id UNINDEXED,
+  topic,
+  discovery,
+  source_reference
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS patterns_fts USING fts5(
+  id UNINDEXED,
+  problem_description,
+  solution_summary,
+  applies_when
 );
 
 -- ==================================================

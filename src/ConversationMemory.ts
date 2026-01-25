@@ -21,6 +21,9 @@ import { DecisionExtractor } from "./parsers/DecisionExtractor.js";
 import { MistakeExtractor } from "./parsers/MistakeExtractor.js";
 import { GitIntegrator } from "./parsers/GitIntegrator.js";
 import { RequirementsExtractor } from "./parsers/RequirementsExtractor.js";
+import { MethodologyExtractor } from "./parsers/MethodologyExtractor.js";
+import { ResearchExtractor } from "./parsers/ResearchExtractor.js";
+import { SolutionPatternExtractor } from "./parsers/SolutionPatternExtractor.js";
 import { SemanticSearch } from "./search/SemanticSearch.js";
 import { getWorktreeInfo } from "./utils/worktree.js";
 
@@ -87,6 +90,9 @@ export class ConversationMemory {
   private decisionExtractor: DecisionExtractor;
   private mistakeExtractor: MistakeExtractor;
   private requirementsExtractor: RequirementsExtractor;
+  private methodologyExtractor: MethodologyExtractor;
+  private researchExtractor: ResearchExtractor;
+  private solutionPatternExtractor: SolutionPatternExtractor;
   private semanticSearch: SemanticSearch;
 
   constructor() {
@@ -101,6 +107,9 @@ export class ConversationMemory {
     this.decisionExtractor = new DecisionExtractor();
     this.mistakeExtractor = new MistakeExtractor();
     this.requirementsExtractor = new RequirementsExtractor();
+    this.methodologyExtractor = new MethodologyExtractor();
+    this.researchExtractor = new ResearchExtractor();
+    this.solutionPatternExtractor = new SolutionPatternExtractor();
     this.semanticSearch = new SemanticSearch(this.sqliteManager);
   }
 
@@ -222,6 +231,33 @@ export class ConversationMemory {
       parseResult.messages
     );
     await this.storage.storeValidations(validations, conversationIdMap);
+
+    // Extract methodologies (problem-solving approaches)
+    console.error("\n=== Extracting Methodologies ===");
+    const methodologies = this.methodologyExtractor.extractMethodologies(
+      parseResult.messages,
+      parseResult.tool_uses,
+      parseResult.tool_results
+    );
+    await this.storage.storeMethodologies(methodologies, conversationIdMap, messageIdMap);
+
+    // Extract research findings
+    console.error("\n=== Extracting Research Findings ===");
+    const findings = this.researchExtractor.extractFindings(
+      parseResult.messages,
+      parseResult.tool_uses,
+      parseResult.tool_results
+    );
+    await this.storage.storeResearchFindings(findings, conversationIdMap, messageIdMap);
+
+    // Extract solution patterns
+    console.error("\n=== Extracting Solution Patterns ===");
+    const patterns = this.solutionPatternExtractor.extractPatterns(
+      parseResult.messages,
+      parseResult.tool_uses,
+      parseResult.tool_results
+    );
+    await this.storage.storeSolutionPatterns(patterns, conversationIdMap, messageIdMap);
 
     // Git integration
     if (options.enableGitIntegration !== false) {

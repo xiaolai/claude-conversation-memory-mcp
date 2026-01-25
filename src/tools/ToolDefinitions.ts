@@ -1882,4 +1882,105 @@ export const TOOLS = {
       },
     },
   },
+
+  // ==================== Phase 9: Methodology & Research Tracking ====================
+
+  get_methodologies: {
+    name: "get_methodologies",
+    description: "Search for problem-solving methodologies used in past conversations. Shows how problems were approached, what steps were taken, tools used, and outcomes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query for problem statements or approaches",
+        },
+        approach: {
+          type: "string",
+          enum: ["exploration", "research", "implementation", "debugging", "refactoring", "testing"],
+          description: "Filter by approach type",
+        },
+        outcome: {
+          type: "string",
+          enum: ["success", "partial", "failed", "ongoing"],
+          description: "Filter by outcome",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum results (default: 10)",
+          default: 10,
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  get_research_findings: {
+    name: "get_research_findings",
+    description: "Search for discoveries and findings made during code exploration and research. Shows what was discovered, source of the finding, and relevance.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query for topics or discoveries",
+        },
+        source_type: {
+          type: "string",
+          enum: ["code", "documentation", "web", "experimentation", "user_input"],
+          description: "Filter by source type",
+        },
+        relevance: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "Filter by relevance level",
+        },
+        confidence: {
+          type: "string",
+          enum: ["verified", "likely", "uncertain"],
+          description: "Filter by confidence level",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum results (default: 10)",
+          default: 10,
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  get_solution_patterns: {
+    name: "get_solution_patterns",
+    description: "Search for reusable solution patterns from past problem-solving. Shows problem categories, solutions, and when to apply them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query for problems or solutions",
+        },
+        problem_category: {
+          type: "string",
+          enum: ["error-handling", "performance", "authentication", "database", "api-design", "testing", "refactoring", "configuration", "file-operations", "async-patterns", "general"],
+          description: "Filter by problem category",
+        },
+        effectiveness: {
+          type: "string",
+          enum: ["excellent", "good", "moderate", "poor"],
+          description: "Filter by effectiveness level",
+        },
+        technology: {
+          type: "string",
+          description: "Filter by technology/framework used",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum results (default: 10)",
+          default: 10,
+        },
+      },
+      required: ["query"],
+    },
+  },
 };

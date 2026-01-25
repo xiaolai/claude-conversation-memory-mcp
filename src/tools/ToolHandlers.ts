@@ -6091,4 +6091,326 @@ export class ToolHandlers {
       };
     }
   }
+
+  // ==================== Phase 9: Methodology & Research Tracking ====================
+
+  /**
+   * Search for problem-solving methodologies.
+   *
+   * @param args.query - Search query for problem statements or approaches
+   * @param args.approach - Filter by approach type
+   * @param args.outcome - Filter by outcome
+   * @param args.limit - Maximum results (default: 10)
+   * @returns Matching methodologies with problem statements, steps, and outcomes
+   */
+  async getMethodologies(args: Record<string, unknown>): Promise<{
+    query: string;
+    methodologies: Array<{
+      id: string;
+      problem_statement: string;
+      approach: string;
+      steps_taken: Array<{ order: number; action: string; tool?: string; succeeded: boolean }>;
+      tools_used: string[];
+      files_involved: string[];
+      outcome: string;
+      what_worked?: string;
+      what_didnt_work?: string;
+      started_at: number;
+      ended_at: number;
+    }>;
+    total_found: number;
+  }> {
+    await this.maybeAutoIndex();
+
+    const query = args.query as string;
+    const approach = args.approach as string | undefined;
+    const outcome = args.outcome as string | undefined;
+    const limit = (args.limit as number) || 10;
+
+    let sql = `
+      SELECT m.*
+      FROM methodologies m
+      WHERE 1=1
+    `;
+    const params: (string | number)[] = [];
+
+    // FTS search
+    const ftsResults = this.db.prepare(`
+      SELECT id, rank
+      FROM methodologies_fts
+      WHERE methodologies_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(`"${query}"*`, limit * 2) as Array<{ id: string; rank: number }>;
+
+    if (ftsResults.length > 0) {
+      const ids = ftsResults.map(r => `'${r.id}'`).join(",");
+      sql += ` AND m.id IN (${ids})`;
+    }
+
+    if (approach) {
+      sql += " AND m.approach = ?";
+      params.push(approach);
+    }
+
+    if (outcome) {
+      sql += " AND m.outcome = ?";
+      params.push(outcome);
+    }
+
+    sql += " ORDER BY m.started_at DESC LIMIT ?";
+    params.push(limit);
+
+    const rows = this.db.prepare(sql).all(...params) as Array<{
+      id: string;
+      problem_statement: string;
+      approach: string;
+      steps_taken: string;
+      tools_used: string;
+      files_involved: string;
+      outcome: string;
+      what_worked: string | null;
+      what_didnt_work: string | null;
+      started_at: number;
+      ended_at: number;
+    }>;
+
+    const methodologies = rows.map(row => ({
+      id: row.id,
+      problem_statement: row.problem_statement,
+      approach: row.approach,
+      steps_taken: safeJsonParse(row.steps_taken, []),
+      tools_used: safeJsonParse(row.tools_used, []),
+      files_involved: safeJsonParse(row.files_involved, []),
+      outcome: row.outcome,
+      what_worked: row.what_worked || undefined,
+      what_didnt_work: row.what_didnt_work || undefined,
+      started_at: row.started_at,
+      ended_at: row.ended_at,
+    }));
+
+    return {
+      query,
+      methodologies,
+      total_found: methodologies.length,
+    };
+  }
+
+  /**
+   * Search for research findings and discoveries.
+   *
+   * @param args.query - Search query for topics or discoveries
+   * @param args.source_type - Filter by source type
+   * @param args.relevance - Filter by relevance level
+   * @param args.confidence - Filter by confidence level
+   * @param args.limit - Maximum results (default: 10)
+   * @returns Matching findings with topics, discoveries, and sources
+   */
+  async getResearchFindings(args: Record<string, unknown>): Promise<{
+    query: string;
+    findings: Array<{
+      id: string;
+      topic: string;
+      discovery: string;
+      source_type: string;
+      source_reference?: string;
+      relevance: string;
+      confidence: string;
+      related_to: string[];
+      timestamp: number;
+    }>;
+    total_found: number;
+  }> {
+    await this.maybeAutoIndex();
+
+    const query = args.query as string;
+    const source_type = args.source_type as string | undefined;
+    const relevance = args.relevance as string | undefined;
+    const confidence = args.confidence as string | undefined;
+    const limit = (args.limit as number) || 10;
+
+    let sql = `
+      SELECT r.*
+      FROM research_findings r
+      WHERE 1=1
+    `;
+    const params: (string | number)[] = [];
+
+    // FTS search
+    const ftsResults = this.db.prepare(`
+      SELECT id, rank
+      FROM research_fts
+      WHERE research_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(`"${query}"*`, limit * 2) as Array<{ id: string; rank: number }>;
+
+    if (ftsResults.length > 0) {
+      const ids = ftsResults.map(r => `'${r.id}'`).join(",");
+      sql += ` AND r.id IN (${ids})`;
+    }
+
+    if (source_type) {
+      sql += " AND r.source_type = ?";
+      params.push(source_type);
+    }
+
+    if (relevance) {
+      sql += " AND r.relevance = ?";
+      params.push(relevance);
+    }
+
+    if (confidence) {
+      sql += " AND r.confidence = ?";
+      params.push(confidence);
+    }
+
+    sql += " ORDER BY r.timestamp DESC LIMIT ?";
+    params.push(limit);
+
+    const rows = this.db.prepare(sql).all(...params) as Array<{
+      id: string;
+      topic: string;
+      discovery: string;
+      source_type: string;
+      source_reference: string | null;
+      relevance: string;
+      confidence: string;
+      related_to: string;
+      timestamp: number;
+    }>;
+
+    const findings = rows.map(row => ({
+      id: row.id,
+      topic: row.topic,
+      discovery: row.discovery,
+      source_type: row.source_type,
+      source_reference: row.source_reference || undefined,
+      relevance: row.relevance,
+      confidence: row.confidence,
+      related_to: safeJsonParse(row.related_to, []),
+      timestamp: row.timestamp,
+    }));
+
+    return {
+      query,
+      findings,
+      total_found: findings.length,
+    };
+  }
+
+  /**
+   * Search for solution patterns.
+   *
+   * @param args.query - Search query for problems or solutions
+   * @param args.problem_category - Filter by problem category
+   * @param args.effectiveness - Filter by effectiveness level
+   * @param args.technology - Filter by technology
+   * @param args.limit - Maximum results (default: 10)
+   * @returns Matching patterns with problems, solutions, and applicability
+   */
+  async getSolutionPatterns(args: Record<string, unknown>): Promise<{
+    query: string;
+    patterns: Array<{
+      id: string;
+      problem_category: string;
+      problem_description: string;
+      solution_summary: string;
+      solution_steps: string[];
+      code_pattern?: string;
+      technology: string[];
+      prerequisites: string[];
+      applies_when: string;
+      avoid_when?: string;
+      applied_to_files: string[];
+      effectiveness: string;
+      timestamp: number;
+    }>;
+    total_found: number;
+  }> {
+    await this.maybeAutoIndex();
+
+    const query = args.query as string;
+    const problem_category = args.problem_category as string | undefined;
+    const effectiveness = args.effectiveness as string | undefined;
+    const technology = args.technology as string | undefined;
+    const limit = (args.limit as number) || 10;
+
+    let sql = `
+      SELECT p.*
+      FROM solution_patterns p
+      WHERE 1=1
+    `;
+    const params: (string | number)[] = [];
+
+    // FTS search
+    const ftsResults = this.db.prepare(`
+      SELECT id, rank
+      FROM patterns_fts
+      WHERE patterns_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(`"${query}"*`, limit * 2) as Array<{ id: string; rank: number }>;
+
+    if (ftsResults.length > 0) {
+      const ids = ftsResults.map(r => `'${r.id}'`).join(",");
+      sql += ` AND p.id IN (${ids})`;
+    }
+
+    if (problem_category) {
+      sql += " AND p.problem_category = ?";
+      params.push(problem_category);
+    }
+
+    if (effectiveness) {
+      sql += " AND p.effectiveness = ?";
+      params.push(effectiveness);
+    }
+
+    if (technology) {
+      sql += " AND p.technology LIKE ?";
+      params.push(`%${technology}%`);
+    }
+
+    sql += " ORDER BY p.timestamp DESC LIMIT ?";
+    params.push(limit);
+
+    const rows = this.db.prepare(sql).all(...params) as Array<{
+      id: string;
+      problem_category: string;
+      problem_description: string;
+      solution_summary: string;
+      solution_steps: string;
+      code_pattern: string | null;
+      technology: string;
+      prerequisites: string;
+      applies_when: string;
+      avoid_when: string | null;
+      applied_to_files: string;
+      effectiveness: string;
+      timestamp: number;
+    }>;
+
+    const patterns = rows.map(row => ({
+      id: row.id,
+      problem_category: row.problem_category,
+      problem_description: row.problem_description,
+      solution_summary: row.solution_summary,
+      solution_steps: safeJsonParse(row.solution_steps, []),
+      code_pattern: row.code_pattern || undefined,
+      technology: safeJsonParse(row.technology, []),
+      prerequisites: safeJsonParse(row.prerequisites, []),
+      applies_when: row.applies_when,
+      avoid_when: row.avoid_when || undefined,
+      applied_to_files: safeJsonParse(row.applied_to_files, []),
+      effectiveness: row.effectiveness,
+      timestamp: row.timestamp,
+    }));
+
+    return {
+      query,
+      patterns,
+      total_found: patterns.length,
+    };
+  }
 }

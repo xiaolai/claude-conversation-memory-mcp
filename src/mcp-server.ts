@@ -127,6 +127,10 @@ export class ConversationMemoryServer {
       get_health_report: (args) => this.handlers.getHealthReport(args),
       run_maintenance: (args) => this.handlers.runMaintenance(args),
       get_maintenance_history: (args) => this.handlers.getMaintenanceHistory(args),
+      // Phase 9: Methodology & Research Tracking
+      get_methodologies: (args) => this.handlers.getMethodologies(args),
+      get_research_findings: (args) => this.handlers.getResearchFindings(args),
+      get_solution_patterns: (args) => this.handlers.getSolutionPatterns(args),
     };
   }
 
